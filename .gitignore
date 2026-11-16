@@ -1,0 +1,25 @@
+# Dependencies and build output
+node_modules/
+/frontend/dist/
+/bin/
+/.task/
+/.wails/
+
+# Local archives, logs, caches, and editor/OS files
+/源码.zip
+/1-main-warm.png
+/assets/
+/spikes/
+*.log
+*.tmp
+*.tsbuildinfo
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+!.env.*.example

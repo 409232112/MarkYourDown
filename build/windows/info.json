@@ -1,0 +1,17 @@
+{
+	"fixed": {
+		"file_version": "1.0.0",
+		"product_version": "1.0.0"
+	},
+	"info": {
+		"0409": {
+			"FileVersion": "1.0.0",
+			"ProductVersion": "1.0.0",
+			"CompanyName": "MarkYourDown",
+			"FileDescription": "类 Typora 的 Markdown 所见即所得编辑器",
+			"LegalCopyright": "Copyright (c) 2026 MarkYourDown",
+			"ProductName": "MarkYourDown",
+			"Comments": "MarkYourDown Markdown Editor"
+		}
+	}
+}

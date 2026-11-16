@@ -1,0 +1,156 @@
+/* Typora Table Toolbar Replica */
+
+.myd-table-toolbar {
+  position: absolute;
+  height: 30px;
+  background-color: var(--surface, #FAF9F5);
+  border: 1px solid var(--border, #E6E3D8);
+  border-bottom: 1px solid var(--border, #E6E3D8);
+  border-radius: var(--r-sm, 6px) var(--r-sm, 6px) 0 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 6px;
+  box-sizing: border-box;
+  z-index: 100;
+  user-select: none;
+  font-family: var(--font-sans);
+  box-shadow: 0 -2px 6px rgba(0, 0, 0, 0.03);
+}
+
+.myd-table-toolbar-left,
+.myd-table-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.myd-table-btn {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: var(--r-xs, 4px);
+  color: var(--text-2, #6F6D66);
+  cursor: pointer;
+  padding: 0;
+  position: relative;
+  transition: background-color var(--duration-fast, 120ms), color var(--duration-fast, 120ms);
+}
+
+.myd-table-btn:hover {
+  background-color: var(--hover, rgba(31, 30, 29, 0.05));
+  color: var(--text, #2B2A26);
+}
+
+.myd-table-btn.active {
+  background-color: var(--accent-soft, rgba(201, 100, 66, 0.15));
+  color: var(--accent, #C96442);
+}
+
+/* Tooltip */
+.myd-table-tooltip {
+  position: fixed;
+  background-color: #2b2a26;
+  color: #faf9f5;
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 2000;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  display: none;
+  transform: translateX(-50%);
+}
+
+/* Grid Matrix Picker Popover */
+.myd-table-grid-popover {
+  position: absolute;
+  top: 32px;
+  left: 4px;
+  background-color: var(--surface, #FAF9F5);
+  border: 1px solid var(--border, #E6E3D8);
+  border-radius: var(--r-sm, 6px);
+  box-shadow: var(--shadow-lg, 0 8px 24px rgba(0, 0, 0, 0.08));
+  padding: 8px;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  animation: fadeIn 100ms ease-out;
+}
+
+.myd-table-grid-matrix {
+  display: grid;
+  grid-template-columns: repeat(6, 18px);
+  grid-gap: 4px;
+}
+
+.myd-table-grid-cell {
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--border-strong, #D8D4C7);
+  border-radius: 2px;
+  background-color: var(--bg, #FAF9F5);
+  cursor: pointer;
+  transition: background-color 60ms, border-color 60ms;
+}
+
+.myd-table-grid-cell.highlight {
+  background-color: var(--text-2, #6F6D66);
+  border-color: var(--text, #2B2A26);
+}
+
+.myd-table-grid-indicator {
+  font-size: 11px;
+  color: var(--text, #2B2A26);
+  text-align: center;
+  border: 1px solid var(--border, #E6E3D8);
+  border-radius: 4px;
+  padding: 2px 4px;
+  background: var(--bg-side, #F0EEE6);
+  font-family: var(--font-mono, monospace);
+}
+
+/* More Dropdown */
+.myd-table-more-dropdown {
+  position: absolute;
+  top: 32px;
+  right: 4px;
+  background-color: var(--surface, #FAF9F5);
+  border: 1px solid var(--border, #E6E3D8);
+  border-radius: var(--r-sm, 6px);
+  box-shadow: var(--shadow-lg, 0 8px 24px rgba(0, 0, 0, 0.08));
+  padding: 4px 0;
+  min-width: 130px;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  animation: fadeIn 100ms ease-out;
+}
+
+.myd-table-menu-item {
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--text, #2B2A26);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  transition: background-color var(--duration-fast, 120ms);
+}
+
+.myd-table-menu-item:hover {
+  background-color: var(--hover, rgba(31, 30, 29, 0.05));
+  color: var(--text, #2B2A26);
+}
+
+.myd-table-menu-divider {
+  height: 1px;
+  background-color: var(--border, #E6E3D8);
+  margin: 4px 0;
+}

