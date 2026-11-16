@@ -18,7 +18,7 @@ import { createTablePlugin } from './plugins/tablePlugin';
 import { createTaskListPlugin } from './plugins/taskListPlugin';
 import { createCalloutPlugin } from './plugins/calloutPlugin';
 import { createEditorKeymapPlugin, type EditorKeymapCallbacks } from './plugins/keymapPlugin';
-import { createFrontmatterPlugin } from './plugins/frontmatterPlugin';
+import { frontmatterSchema, remarkYamlFrontmatter } from './plugins/frontmatterPlugin';
 import { createImagePlugin } from './plugins/imagePlugin';
 import { createSearchPlugin } from './plugins/searchPlugin';
 
@@ -118,7 +118,6 @@ export async function createLiveEditor(
         createTaskListPlugin(),
         createCalloutPlugin(),
         createEditorKeymapPlugin(options),
-        createFrontmatterPlugin(),
         createSearchPlugin(),
       ]);
 
@@ -135,6 +134,8 @@ export async function createLiveEditor(
       });
     })
     .use(commonmark)
+    .use(remarkYamlFrontmatter)
+    .use(frontmatterSchema)
     .use(gfm)
     .use(history)
     .use(listener);

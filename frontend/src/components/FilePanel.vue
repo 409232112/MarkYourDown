@@ -29,6 +29,7 @@ const isNewFolder = ref(false);
 const creationParentPath = ref<string | null>(null);
 
 interface DocCard {
+  docId?: string;
   title: string;
   ext: string;
   path: string;
@@ -74,26 +75,8 @@ function normalizePath(p: string): string {
   return (p || '').replace(/\\/g, '/').toLowerCase();
 }
 
-function getFileBaseName(p: string): string {
-  if (!p) return '';
-  const norm = normalizePath(p);
-  const parts = norm.split('/').filter(Boolean);
-  return parts[parts.length - 1] || norm;
-}
-
 function isSameFile(pathA: string, pathB: string): boolean {
-  if (!pathA || !pathB) return false;
-  const normA = normalizePath(pathA);
-  const normB = normalizePath(pathB);
-  if (normA === normB) return true;
-  const baseA = getFileBaseName(normA);
-  const baseB = getFileBaseName(normB);
-  if (baseA === baseB && baseA !== '') {
-    if (!normA.includes('/') || !normB.includes('/') || normA.endsWith('/' + baseB) || normB.endsWith('/' + baseA)) {
-      return true;
-    }
-  }
-  return false;
+  return !!pathA && !!pathB && normalizePath(pathA) === normalizePath(pathB);
 }
 
 function extractFolder(path: string): string {
@@ -130,28 +113,53 @@ function flattenWorkspaceFiles(items: WorkspaceItem[], list: WorkspaceItem[] = [
   return list;
 }
 
+const workspaceHasMarkdown = computed(() =>
+  flattenWorkspaceFiles(wsStore.fileTree).some((file) => /\.(md|markdown|mdown)$/i.test(file.name))
+);
+
+const visibleTree = computed(() => {
+  const rows: { item: WorkspaceItem; depth: number }[] = [];
+  const query = searchQuery.value.trim().toLowerCase();
+  const hasDisplayableFile = (item: WorkspaceItem): boolean =>
+    item.isDir
+      ? !!item.children?.some(hasDisplayableFile)
+      : /\.(md|markdown|mdown|txt)$/i.test(item.name);
+  const matches = (item: WorkspaceItem): boolean =>
+    hasDisplayableFile(item) && (item.name.toLowerCase().includes(query) || !!item.children?.some(matches));
+  const visit = (items: WorkspaceItem[], depth: number) => {
+    for (const item of items) {
+      if (!hasDisplayableFile(item)) continue;
+      if (query && !matches(item)) continue;
+      rows.push({ item, depth });
+      if (item.isDir && (query || wsStore.isExpanded(item.path))) {
+        visit(item.children || [], depth + 1);
+      }
+    }
+  };
+  visit(wsStore.fileTree, 0);
+  return rows;
+});
+
 // Document cards computed
 const allDocCards = computed<DocCard[]>(() => {
   const cards: DocCard[] = [];
 
-  function findExisting(targetPath: string, targetTitle: string): DocCard | undefined {
-    return cards.find((c) => {
-      if (isSameFile(c.path, targetPath)) return true;
-      const cBase = getFileBaseName(c.path);
-      const tBase = getFileBaseName(targetPath);
-      if (cBase && tBase && cBase === tBase) return true;
-      if (c.title.toLowerCase() === targetTitle.toLowerCase() && c.ext === splitTitleAndExt(targetPath).ext) return true;
-      return false;
-    });
+  function findExisting(targetPath: string): DocCard | undefined {
+    return cards.find((c) => isSameFile(c.path, targetPath));
   }
 
   // 1. Currently opened documents in docsStore
   for (const doc of docsStore.documents) {
-    const filePath = doc.path || doc.title;
+    if (wsStore.currentFolder) {
+      const root = normalizePath(wsStore.currentFolder.path).replace(/\/$/, '');
+      if (!doc.path || !normalizePath(doc.path).startsWith(`${root}/`)) continue;
+    }
+    const filePath = doc.path || '';
     const { title, ext } = splitTitleAndExt(doc.title);
-    const existing = findExisting(filePath, title);
+    const existing = filePath ? findExisting(filePath) : undefined;
     if (!existing) {
       cards.push({
+        docId: doc.id,
         title,
         ext,
         path: filePath,
@@ -172,7 +180,7 @@ const allDocCards = computed<DocCard[]>(() => {
     const flatFiles = flattenWorkspaceFiles(wsStore.fileTree);
     for (const file of flatFiles) {
       const { title, ext } = splitTitleAndExt(file.name);
-      const existing = findExisting(file.path, title);
+      const existing = findExisting(file.path);
       if (!existing) {
         cards.push({
           title,
@@ -188,9 +196,9 @@ const allDocCards = computed<DocCard[]>(() => {
   }
 
   // 3. Recent files from history
-  for (const rec of recentFilesList.value) {
+  for (const rec of wsStore.currentFolder ? [] : recentFilesList.value) {
     const { title, ext } = splitTitleAndExt(rec.title);
-    const existing = findExisting(rec.path, title);
+    const existing = findExisting(rec.path);
     if (!existing) {
       cards.push({
         title,
@@ -204,14 +212,7 @@ const allDocCards = computed<DocCard[]>(() => {
     }
   }
 
-  // Ensure active card is always placed at the top (index 0)
-  const activeIdx = cards.findIndex((c) => c.active);
-  if (activeIdx > 0) {
-    const [activeCard] = cards.splice(activeIdx, 1);
-    cards.unshift(activeCard);
-  }
-
-  return cards;
+  return cards.sort((a, b) => (a.path || a.title).localeCompare(b.path || b.title, 'zh-CN', { numeric: true }));
 });
 
 const filteredCards = computed(() => {
@@ -238,9 +239,8 @@ async function handleCardClick(card: DocCard) {
   // Check if already open
   const openDoc = docsStore.documents.find(
     (d) =>
-      d.id === card.path ||
-      (d.path && isSameFile(d.path, card.path)) ||
-      getFileBaseName(d.title) === getFileBaseName(card.path)
+      (card.docId && d.id === card.docId) ||
+      (d.path && isSameFile(d.path, card.path))
   );
   if (openDoc) {
     docsStore.switchDocument(openDoc.id);
@@ -253,7 +253,7 @@ async function handleCardClick(card: DocCard) {
     uiStore.flashStatus(`文件不存在或已被删除：${card.title}`);
     await fileApi.removeRecentFile(card.path);
     recentFilesList.value = recentFilesList.value.filter(
-      (r) => !isSameFile(r.path, card.path) && r.title !== card.title
+      (r) => !isSameFile(r.path, card.path)
     );
   }
 }
@@ -406,11 +406,15 @@ onMounted(() => {
       </div>
     </div>
 
+    <div v-if="wsStore.currentFolder && !workspaceHasMarkdown" class="cards-empty">
+      当前文件夹及其子文件夹中没有 Markdown 文件
+    </div>
+
     <!-- Mode 1: Typora-Style Document Cards List (Default) -->
     <div v-if="viewMode === 'cards'" class="doc-card-list">
       <div
         v-for="card in filteredCards"
-        :key="card.path"
+        :key="card.docId || card.path"
         class="doc-card"
         :class="{ active: card.active }"
         @click="handleCardClick(card)"
@@ -449,10 +453,11 @@ onMounted(() => {
       </div>
 
       <div
-        v-for="item in wsStore.fileTree"
+        v-for="{ item, depth } in visibleTree"
         :key="item.path"
         class="tree-node"
         :class="{ active: isDocActive(item) }"
+        :style="{ paddingLeft: `${12 + depth * 16}px` }"
         @click="handleItemClick(item)"
         @contextmenu="handleContextMenu($event, item)"
       >
@@ -676,10 +681,8 @@ onMounted(() => {
   font-weight: 600;
   font-size: 13px;
   color: var(--text, #2B2A26);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 220px;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .card-ext {

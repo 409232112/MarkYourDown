@@ -176,6 +176,37 @@ func TestBackupService(t *testing.T) {
 	}
 }
 
+func TestNativeSelectionsAuthorizeBeforeOpening(t *testing.T) {
+	SetCustomUserDataDir(t.TempDir())
+	defer SetCustomUserDataDir("")
+	fileDir := t.TempDir()
+	filePath := filepath.Join(fileDir, "note.md")
+	if err := os.WriteFile(filePath, []byte("# 测试"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	fileSvc := NewFileService(NewSettingsService(), NewBackupService())
+	if _, err := fileSvc.OpenFileByPath(filePath); err == nil {
+		t.Fatal("unselected file must not be accessible by path")
+	}
+	doc, err := fileSvc.openSelectedFile(filePath)
+	if err != nil || doc.Content != "# 测试" {
+		t.Fatalf("opening selected file: doc=%+v err=%v", doc, err)
+	}
+
+	workspaceDir := t.TempDir()
+	ws := NewWorkspaceService()
+	if _, err := ws.OpenWorkspaceByPath(workspaceDir); err == nil {
+		t.Fatal("unselected workspace must not be accessible by path")
+	}
+	workspace, err := ws.openSelectedWorkspace(workspaceDir)
+	if err != nil || workspace.RootPath != workspaceDir {
+		t.Fatalf("opening selected workspace: workspace=%+v err=%v", workspace, err)
+	}
+	if err := ws.CloseWorkspace(workspaceDir); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestFileAndWorkspaceServices(t *testing.T) {
 	tmpData, err := os.MkdirTemp("", "myd-data-test-*")
 	if err != nil {

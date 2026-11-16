@@ -227,7 +227,7 @@ export const useDocumentsStore = defineStore('documents', () => {
     const doc = documents.value.find((d) => d.id === id);
     if (!doc) return;
 
-    if (doc.status === 'dirty') {
+    if (doc.status !== 'clean') {
       const uiStore = useUiStore();
       uiStore.showConfirm({
         title: i18n.dialog.unsavedTitle,
@@ -237,7 +237,7 @@ export const useDocumentsStore = defineStore('documents', () => {
         cancelText: i18n.dialog.cancel,
         onConfirm: async () => {
           const ok = await saveDocument(id);
-          if (ok) {
+          if (ok && doc.status === 'clean') {
             closeDocument(id);
             onClosed?.();
           }
@@ -256,6 +256,20 @@ export const useDocumentsStore = defineStore('documents', () => {
     }
   }
 
+  function requestCloseDocuments(ids: string[]) {
+    const remaining = [...ids];
+    const closeNext = () => {
+      const id = remaining.shift();
+      if (!id) return;
+      if (!documents.value.some((doc) => doc.id === id)) {
+        closeNext();
+        return;
+      }
+      requestCloseDocument(id, () => queueMicrotask(closeNext));
+    };
+    closeNext();
+  }
+
   function updateContent(id: string, content: string) {
     const doc = documents.value.find((d) => d.id === id);
     if (!doc) return;
@@ -265,11 +279,6 @@ export const useDocumentsStore = defineStore('documents', () => {
       doc.status = 'dirty';
     }
     scheduleDraftBackup(doc);
-  }
-
-  function markEdited(id: string) {
-    const doc = documents.value.find((d) => d.id === id);
-    if (doc?.status === 'clean') doc.status = 'dirty';
   }
 
   let isSaving = false;
@@ -429,8 +438,8 @@ export const useDocumentsStore = defineStore('documents', () => {
     switchDocument,
     closeDocument,
     requestCloseDocument,
+    requestCloseDocuments,
     updateContent,
-    markEdited,
     saveDocument,
     saveAsDocument,
     reloadFromDisk,

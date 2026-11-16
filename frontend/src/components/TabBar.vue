@@ -1,7 +1,22 @@
 <script setup lang="ts">
+import { ref } from 'vue';
 import { useDocumentsStore, type DocState } from '../stores/documents';
+import ContextMenu from './ContextMenu.vue';
 
 const docsStore = useDocumentsStore();
+const menu = ref<{ x: number; y: number; id: string } | null>(null);
+
+function showMenu(doc: DocState, event: MouseEvent) {
+  event.preventDefault();
+  event.stopPropagation();
+  menu.value = { x: event.clientX, y: event.clientY, id: doc.id };
+}
+
+function closeTabs(otherOnly: boolean) {
+  const target = menu.value?.id;
+  menu.value = null;
+  docsStore.requestCloseDocuments(docsStore.documents.filter(doc => !otherOnly || doc.id !== target).map(doc => doc.id));
+}
 
 function handleTabClick(doc: DocState) {
   docsStore.switchDocument(doc.id);
@@ -30,6 +45,7 @@ function handleTabAuxClick(doc: DocState, event: MouseEvent) {
       :class="{ active: doc.id === docsStore.activeDocumentId }"
       @click="handleTabClick(doc)"
       @auxclick="handleTabAuxClick(doc, $event)"
+      @contextmenu="showMenu(doc, $event)"
     >
       <span class="tab-title">
         {{ doc.title }}
@@ -44,9 +60,17 @@ function handleTabAuxClick(doc: DocState, event: MouseEvent) {
       </button>
     </div>
   </div>
+  <Teleport to="body">
+    <ContextMenu v-if="menu" :x="menu.x" :y="menu.y" @close="menu = null">
+      <button class="tab-menu-item" @click="closeTabs(false)">关闭全部</button>
+      <button class="tab-menu-item" @click="closeTabs(true)">关闭其他</button>
+    </ContextMenu>
+  </Teleport>
 </template>
 
 <style scoped>
+.tab-menu-item { display: block; width: 100%; text-align: left; padding: 7px 12px; color: var(--text); border-radius: var(--r-sm); }
+.tab-menu-item:hover { background: var(--hover); }
 .tab-bar {
   display: flex;
   align-items: center;

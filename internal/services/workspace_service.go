@@ -66,7 +66,16 @@ func (ws *WorkspaceService) OpenWorkspaceDialog() (*dto.WorkspaceInfo, error) {
 		return nil, nil // user cancelled
 	}
 
-	return ws.OpenWorkspaceByPath(chosenPath)
+	return ws.openSelectedWorkspace(chosenPath)
+}
+
+// Only paths returned by the native folder picker may be authorized here.
+func (ws *WorkspaceService) openSelectedWorkspace(chosenPath string) (*dto.WorkspaceInfo, error) {
+	path, err := auth.Default().AuthorizeDirectory(chosenPath)
+	if err != nil {
+		return nil, err
+	}
+	return ws.OpenWorkspaceByPath(path)
 }
 
 // OpenWorkspaceByPath watches and returns the workspace tree for an already-authorized directory.

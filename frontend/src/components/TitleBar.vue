@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { ref, onMounted, onUnmounted } from 'vue';
 import { useDocumentsStore } from '../stores/documents';
 import { useWorkspaceStore } from '../stores/workspace';
 import { useSettingsStore, type ThemeType } from '../stores/settings';
@@ -14,13 +14,6 @@ const settingsStore = useSettingsStore();
 const uiStore = useUiStore();
 
 const activeMenu = ref<string | null>(null);
-
-const documentTitle = computed(() => {
-  const doc = docsStore.activeDocument;
-  if (!doc) return '';
-  const dirtyMark = doc.status !== 'clean' ? ' *' : '';
-  return `${doc.title}${dirtyMark}`;
-});
 
 function toggleMenu(menu: string) {
   if (activeMenu.value === menu) {
@@ -471,15 +464,9 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- Center: TabBar when >= 2 documents, or Single Document Title -->
+    <!-- Document tabs -->
     <div class="title-center">
-      <TabBar v-if="docsStore.documents.length >= 2" class="wails-no-drag" />
-      <div
-        v-else-if="docsStore.documents.length === 1"
-        class="single-doc-title"
-      >
-        {{ documentTitle }}
-      </div>
+      <TabBar v-if="docsStore.documents.length" class="wails-no-drag" />
     </div>
 
     <!-- Right: Frameless Window Controls (Windows native style: ─ □ ✕) -->

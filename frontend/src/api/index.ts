@@ -357,11 +357,13 @@ export const workspaceApi = {
       if (WorkspaceService && typeof WorkspaceService.GetWorkspaceTree === 'function') {
         const res = await WorkspaceService.GetWorkspaceTree(dirPath, false);
         if (res && res.children) {
-          return res.children.map((c: any) => ({
+          const mapItem = (c: any): WorkspaceItem => ({
             name: c.name,
             path: c.path,
             isDir: c.isDir,
-          }));
+            children: c.children?.map(mapItem),
+          });
+          return res.children.map(mapItem);
         }
       }
     } catch (e) {

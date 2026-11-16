@@ -180,9 +180,6 @@ async function mountEditor() {
         initialText: doc.content,
         docPath: doc.path,
         getDocPath: () => docsStore.activeDocument?.path || doc.path,
-        onDocChange: () => {
-          if (doc.id === docsStore.activeDocumentId) docsStore.markEdited(doc.id);
-        },
         onChange: (markdown: string) => {
           if (doc.id === docsStore.activeDocumentId) {
             docsStore.updateContent(doc.id, markdown);

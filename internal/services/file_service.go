@@ -134,7 +134,16 @@ func (s *FileService) OpenFileDialog() (*dto.DocumentPayload, error) {
 		return nil, nil // user cancelled
 	}
 
-	return s.OpenFileByPath(chosenPath)
+	return s.openSelectedFile(chosenPath)
+}
+
+// Only paths returned by the native file picker may be authorized here.
+func (s *FileService) openSelectedFile(chosenPath string) (*dto.DocumentPayload, error) {
+	path, err := auth.Default().AuthorizeFile(chosenPath)
+	if err != nil {
+		return nil, err
+	}
+	return s.OpenFileByPath(path)
 }
 
 // OpenFileByPath validates and reads a file directly from a given path (must be pre-authorized via dialog, drag-and-drop, CLI, or session).

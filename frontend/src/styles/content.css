@@ -305,6 +305,19 @@
 }
 
 /* Images */
+.markdown-body pre.myd-frontmatter {
+  padding: 14px 16px;
+  margin: 0 0 1.4em;
+  border-radius: var(--r-sm);
+  background: var(--bg-side);
+  color: var(--text-2);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.85em;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .markdown-body img,
 .myd-content img {
   max-width: 100%;

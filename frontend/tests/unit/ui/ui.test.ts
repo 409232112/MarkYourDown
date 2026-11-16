@@ -1,10 +1,11 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { setActivePinia, createPinia } from 'pinia';
 import { useDocumentsStore } from '../../../src/stores/documents';
 import { useWorkspaceStore } from '../../../src/stores/workspace';
 import { useSettingsStore } from '../../../src/stores/settings';
 import { useUiStore } from '../../../src/stores/ui';
 import { i18n } from '../../../src/i18n/zh-CN';
+import { workspaceApi } from '../../../src/api';
 
 describe('UI Stores & Shell Logic', () => {
   beforeEach(() => {
@@ -12,6 +13,23 @@ describe('UI Stores & Shell Logic', () => {
   });
 
   describe('Documents Store', () => {
+    it('closes multiple documents sequentially and stops on cancellation', async () => {
+      const store = useDocumentsStore();
+      const ui = useUiStore();
+      const first = store.createNewDocument('first');
+      const second = store.createNewDocument('second');
+      store.updateContent(first.id, 'first changes');
+      store.updateContent(second.id, 'second changes');
+      store.requestCloseDocuments([first.id, second.id]);
+      expect(ui.confirmDialog.message).toContain('first');
+      ui.confirmDialog.onSecondary?.();
+      await Promise.resolve();
+      expect(store.documents.some(doc => doc.id === first.id)).toBe(false);
+      expect(ui.confirmDialog.visible).toBe(true);
+      expect(ui.confirmDialog.message).toContain('second');
+      ui.confirmDialog.onCancel?.();
+      expect(store.documents.some(doc => doc.id === second.id)).toBe(true);
+    });
     it('creates new document and tracks active document', () => {
       const store = useDocumentsStore();
       const doc = store.createNewDocument('测试文档', '# 标题一\n正文内容');
@@ -192,6 +210,31 @@ describe('UI Stores & Shell Logic', () => {
   });
 
   describe('Workspace Store', () => {
+    it('shows the file sidebar after opening a folder, but not after cancellation', async () => {
+      const store = useWorkspaceStore();
+      const ui = useUiStore();
+      const picker = vi.spyOn(workspaceApi, 'openFolderDialog');
+      const list = vi.spyOn(workspaceApi, 'listDirectory').mockResolvedValue([]);
+      try {
+        ui.sidebarVisible = false;
+        ui.focusMode = true;
+        picker.mockResolvedValueOnce(null);
+        await store.openFolder();
+        expect(ui.sidebarTab).toBe('outline');
+        expect(ui.focusMode).toBe(true);
+
+        picker.mockResolvedValueOnce({ path: 'C:/notes', name: 'notes' });
+        await store.openFolder();
+        expect(ui.sidebarTab).toBe('files');
+        expect(ui.sidebarVisible).toBe(true);
+        expect(ui.focusMode).toBe(false);
+        expect(store.currentFolder?.name).toBe('notes');
+        expect(ui.temporaryStatusMessage).toContain('notes');
+      } finally {
+        picker.mockRestore();
+        list.mockRestore();
+      }
+    });
     it('sorts folders first and orders alphabetically', async () => {
       const store = useWorkspaceStore();
       store.fileTree = [

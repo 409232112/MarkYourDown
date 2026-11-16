@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
 import { workspaceApi, type WorkspaceItem } from '../api';
+import { useUiStore } from './ui';
 
 const collator = new Intl.Collator('zh-CN', { numeric: true });
 
@@ -26,6 +27,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       expandedPaths.value.clear();
       expandedPaths.value.add(res.path);
       await loadDirectory(res.path);
+      showOpenedFolder(res.name);
     }
   }
 
@@ -35,6 +37,14 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     expandedPaths.value.clear();
     expandedPaths.value.add(path);
     await loadDirectory(path);
+    showOpenedFolder(folderName);
+  }
+
+  function showOpenedFolder(name: string) {
+    const ui = useUiStore();
+    ui.focusMode = false;
+    ui.setSidebarTab('files');
+    ui.flashStatus(`已打开文件夹：${name}`, 3000);
   }
 
   async function loadDirectory(dirPath: string) {
