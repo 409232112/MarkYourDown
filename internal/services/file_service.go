@@ -315,18 +315,7 @@ func (s *FileService) SaveFileAs(req dto.SaveFileRequest) (*dto.SaveFileResponse
 		return nil, errors.New("application not initialized")
 	}
 
-	dialog := app.Dialog.SaveFile()
-	dialog.AddFilter("Markdown 文档 (*.md)", "*.md")
-	dialog.AddFilter("文本文件 (*.txt)", "*.txt")
-
-	if req.Path != "" {
-		dialog.SetDirectory(filepath.Dir(req.Path))
-		dialog.SetFilename(filepath.Base(req.Path))
-	} else {
-		dialog.SetFilename("未命名.md")
-	}
-
-	chosenPath, err := dialog.PromptForSingleSelection()
+	chosenPath, err := promptDocumentSavePath(app, req.Path)
 	if err != nil {
 		return nil, err
 	}

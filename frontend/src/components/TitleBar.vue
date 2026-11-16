@@ -507,7 +507,7 @@ onUnmounted(() => {
   justify-content: space-between;
   padding: 0 0 0 12px;
   position: relative;
-  z-index: 100;
+  z-index: 110;
   user-select: none;
 }
 

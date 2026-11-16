@@ -324,9 +324,8 @@ export const useDocumentsStore = defineStore('documents', () => {
 
     const oldId = doc.id;
     const savedContent = doc.content;
-    const saved = await fileApi.saveFileDialog(savedContent, doc.title, doc.encoding, doc.eol);
+    const saved = await fileApi.saveFileDialog(savedContent, doc.title, doc.encoding, doc.eol, doc.id);
     if (saved) {
-      doc.id = saved.id;
       doc.path = saved.path;
       doc.title = saved.title;
       doc.encoding = saved.encoding;

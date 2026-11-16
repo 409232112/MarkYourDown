@@ -157,8 +157,9 @@ describe('UI Stores & Shell Logic', () => {
       const ok = await store.saveAsDocument(doc.id);
       expect(ok).toBe(true);
       expect(doc.status).toBe('clean');
-      // The old ID should not match the current doc ID if saveAs generated new ID
-      // and old draft is guaranteed removed
+      expect(doc.id).toBe(oldId);
+      expect(store.activeDocumentId).toBe(oldId);
+      expect(store.activeDocument?.content).toBe('修改后的内容');
     });
 
     it('recovery dialog onCancel discards all backups completely (R2)', () => {

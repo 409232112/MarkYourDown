@@ -153,7 +153,7 @@ export class CodeBlockView implements NodeView {
     picker.style.position = 'absolute';
     picker.style.left = `${rect.left}px`;
     picker.style.top = `${rect.bottom + 4}px`;
-    picker.style.zIndex = '1000';
+    picker.style.zIndex = '105';
 
     document.body.appendChild(picker);
     input.focus();

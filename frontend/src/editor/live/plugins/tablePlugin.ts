@@ -311,7 +311,6 @@ export class TableToolbar {
     this.dom.style.left = `${Math.max(8, left)}px`;
     this.dom.style.width = `${Math.max(160, tableRect.width)}px`;
     this.dom.style.top = `${Math.max(0, top - 30)}px`;
-    this.dom.style.zIndex = '999';
   }
 
   public show(tableEl: HTMLElement) {

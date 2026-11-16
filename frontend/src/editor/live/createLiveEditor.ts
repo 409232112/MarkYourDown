@@ -1,14 +1,15 @@
-import { Editor, rootCtx, defaultValueCtx, editorViewCtx, prosePluginsCtx, serializerCtx, schemaCtx } from '@milkdown/kit/core';
+import { Editor, rootCtx, defaultValueCtx, editorViewCtx, prosePluginsCtx, serializerCtx, schemaCtx, parserCtx } from '@milkdown/kit/core';
 import { commonmark } from '@milkdown/kit/preset/commonmark';
 import { gfm } from '@milkdown/kit/preset/gfm';
 import { history } from '@milkdown/kit/plugin/history';
 import { listener, listenerCtx } from '@milkdown/kit/plugin/listener';
 import type { Node as PMNode } from '@milkdown/kit/prose/model';
+import { Slice } from '@milkdown/kit/prose/model';
 import type { EditorView } from '@milkdown/kit/prose/view';
 import { Plugin, PluginKey, Selection } from '@milkdown/kit/prose/state';
 
 import type { Baseline } from '../../shared/types';
-import { buildBaseline } from '../fidelity/baseline';
+import { buildBaseline, parseToMdast } from '../fidelity/baseline';
 import { serializeWithBaseline } from '../fidelity/serializeWithBaseline';
 import { globalImeGuard } from '../sync/ime';
 
@@ -56,6 +57,32 @@ export async function createLiveEditor(
   let detachIme: (() => void) | null = null;
 
   let serializeNode: ((node: any) => string) | null = null;
+  let parseMarkdown: ((text: string) => PMNode | null | undefined) | null = null;
+
+  const markdownPastePlugin = new Plugin({
+    key: new PluginKey('myd-markdown-paste'),
+    props: {
+      handlePaste(view, event) {
+        const clipboard = event.clipboardData;
+        const text = clipboard?.getData('text/plain');
+        if (!text || !parseMarkdown || view.state.selection.$from.parent.type.spec.code) return false;
+        try {
+          const tree = parseToMdast(text);
+          const hasMarkdown = tree.children.some((node: any) =>
+            node.type !== 'paragraph' || node.children?.some((child: any) => child.type !== 'text')
+          );
+          if (!hasMarkdown) return false;
+          const parsed = parseMarkdown(text);
+          if (!parsed?.childCount) return false;
+          view.dispatch(view.state.tr.replaceSelection(Slice.maxOpen(parsed.content)).scrollIntoView());
+          return true;
+        } catch (error) {
+          console.warn('Markdown paste parsing failed:', error);
+          return false;
+        }
+      },
+    },
+  });
 
   const docUpdatePlugin = new Plugin({
     key: new PluginKey('myd-doc-update-listener'),
@@ -82,6 +109,7 @@ export async function createLiveEditor(
 
       // Register custom ProseMirror plugins
       ctx.update(prosePluginsCtx, (prev) => [
+        markdownPastePlugin,
         ...prev,
         docUpdatePlugin,
         createImagePlugin({ getDocPath: () => options.getDocPath?.() || currentDocPath }),
@@ -121,6 +149,7 @@ export async function createLiveEditor(
     const view = ctx.get(editorViewCtx);
     const serializer = ctx.get(serializerCtx);
     const schema = ctx.get(schemaCtx);
+    parseMarkdown = ctx.get(parserCtx);
 
     serializeNode = (node: any) => {
       if (!node) return '';

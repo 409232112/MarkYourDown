@@ -984,6 +984,7 @@ onUnmounted(() => {
   overflow-y: auto;
   overflow-x: hidden;
   position: relative;
+  isolation: isolate;
   background-color: var(--bg);
   cursor: text;
   transition: opacity var(--duration-claude) var(--ease-claude);

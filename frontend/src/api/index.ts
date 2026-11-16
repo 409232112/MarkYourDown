@@ -168,10 +168,10 @@ export const fileApi = {
     return { success: true, hash: 'mock-hash', mtimeMs: Date.now(), size: content.length };
   },
 
-  async saveFileDialog(content: string, defaultName?: string, encoding?: string, eol?: string): Promise<FileInfo | null> {
+  async saveFileDialog(content: string, defaultName?: string, encoding?: string, eol?: string, documentId?: string): Promise<FileInfo | null> {
     if (typeof window === 'undefined') {
       return {
-        id: `doc-${Date.now()}`,
+        id: documentId || `doc-${Date.now()}`,
         path: defaultName || 'Untitled.md',
         title: defaultName || 'Untitled.md',
         content,
@@ -185,7 +185,7 @@ export const fileApi = {
     try {
       if (FileService && typeof FileService.SaveFileAs === 'function') {
         const res = await FileService.SaveFileAs({
-          documentId: `doc-${Date.now()}`,
+          documentId: documentId || `doc-${Date.now()}`,
           path: defaultName || 'Untitled.md',
           content,
           revision: 1,
@@ -194,7 +194,7 @@ export const fileApi = {
           encoding: encoding || 'utf8',
           eol: eol || 'crlf',
         });
-        if (res) {
+        if (res && res.status === 'clean') {
           const title = res.path.split(/[/\\]/).pop() || 'Untitled.md';
           return {
             id: res.documentId || `doc-${Date.now()}`,
