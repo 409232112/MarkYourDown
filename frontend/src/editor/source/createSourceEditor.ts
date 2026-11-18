@@ -8,6 +8,7 @@ export interface SourceEditorOptions {
   initialText?: string;
   initialOffset?: number;
   readOnly?: boolean;
+  allowReadOnlyCaret?: boolean;
   showLineNumbers?: boolean;
   wordWrap?: boolean;
   onChange?: (val: string) => void;
@@ -128,7 +129,11 @@ export function createSourceEditor(
   }
 
   if (options.readOnly) {
-    extensions.push(EditorState.readOnly.of(true));
+    extensions.push(EditorState.readOnly.of(true), EditorView.editable.of(!!options.allowReadOnlyCaret),
+      EditorState.transactionFilter.of((tr) => {
+        if (!tr.docChanged) return tr;
+          return [];
+      }));
   }
 
   // Listener for doc updates & cursor moves

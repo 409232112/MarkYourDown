@@ -168,7 +168,7 @@ func buildTree(dirPath string, showAll bool) (*dto.FileTreeNode, error) {
 			}
 		} else {
 			ext := strings.ToLower(filepath.Ext(name))
-			if showAll || ext == ".md" || ext == ".markdown" || ext == ".mdown" || ext == ".txt" {
+			if showAll || ext == ".md" || ext == ".markdown" || ext == ".mdown" || ext == ".txt" || ext == ".html" || ext == ".htm" {
 				info, err := entry.Info()
 				var size int64
 				if err == nil {
@@ -304,7 +304,7 @@ func (ws *WorkspaceService) RenamePath(oldPath, newName string) (string, error) 
 	}
 	if !oldStat.IsDir() {
 		ext := strings.ToLower(filepath.Ext(cleanName))
-		if ext != ".md" && ext != ".markdown" && ext != ".mdown" && ext != ".txt" {
+		if ext != ".md" && ext != ".markdown" && ext != ".mdown" && ext != ".txt" && ext != ".html" && ext != ".htm" {
 			return "", fmt.Errorf("unsupported file extension: %s", ext)
 		}
 	}

@@ -3,6 +3,49 @@ import { ref, computed } from 'vue';
 import { fileApi, backupApi, type FileInfo } from '../api';
 import { i18n } from '../i18n/zh-CN';
 import { useUiStore } from './ui';
+import { useSettingsStore } from './settings';
+import { FileService } from '../../bindings/markyourdown/internal/services';
+import { convertHTMLAsync, type ConversionResult } from '../import/html';
+import { unified } from 'unified';
+import remarkParse from 'remark-parse';
+import remarkGfm from 'remark-gfm';
+import remarkStringify from 'remark-stringify';
+import { visit } from 'unist-util-visit';
+
+type HtmlResult = Extract<ConversionResult, {status: 'complete' | 'degraded'}>;
+export interface HtmlImportState {
+  sourcePath: string;
+  sourceState: 'unchanged' | 'changed' | 'deleted' | 'unknown';
+  sourceDisk: { mtimeMs: number; size: number; hash: string };
+  state: 'loading' | 'complete' | 'degraded' | 'unsupported' | 'failed';
+  result?: ConversionResult;
+  sourceHtml: string;
+  generation: number;
+  saving: boolean;
+}
+export function fileUrl(path: string): string {
+  const normalized = path.replace(/\\/g, '/');
+  if (normalized.startsWith('//')) {
+    const parts = normalized.slice(2).split('/');
+    const host = parts.shift() || '';
+    return `file://${host}/${parts.map(encodeURIComponent).join('/')}`;
+  }
+  if (/^[a-z]:\//i.test(normalized)) return `file:///${normalized.split('/').map((p, i) => i === 0 ? p : encodeURIComponent(p)).join('/')}`;
+  return `file://${normalized.split('/').map(encodeURIComponent).join('/')}`;
+}
+function rewriteReferences(markdown: string, rewrites: Array<{from: string; to: string}>): string {
+  if (!rewrites.length) return markdown;
+  const processor = unified().use(remarkParse).use(remarkGfm).use(remarkStringify, { bullet: '-', fences: true });
+  const tree = processor.parse(markdown);
+  const map = new Map(rewrites.map(r => [r.from, r.to]));
+  visit(tree, (node) => {
+    if ((node.type === 'image' || node.type === 'link' || node.type === 'definition') && 'url' in node && typeof node.url === 'string') {
+      node.url = map.get(node.url) || node.url;
+    }
+  });
+  return processor.stringify(tree);
+}
+
 
 export interface DocState {
   id: string;
@@ -17,6 +60,7 @@ export interface DocState {
   cursor?: unknown;
   scrollTop?: number;
   saveErrorMessage?: string;
+  htmlImport?: HtmlImportState;
 }
 
 export interface HeadingItem {
@@ -107,11 +151,96 @@ export const useDocumentsStore = defineStore('documents', () => {
     if (!path) return null;
     const norm = path.replace(/\\/g, '/').toLowerCase();
     const existing = documents.value.find((d) => {
-      if (!d.path) return false;
-      const dNorm = d.path.replace(/\\/g, '/').toLowerCase();
+      const sourcePath = d.htmlImport?.sourcePath || d.path;
+      if (!sourcePath) return false;
+      const dNorm = sourcePath.replace(/\\/g, '/').toLowerCase();
       return dNorm === norm;
     });
     return existing ? existing.id : null;
+  }
+
+  // The converter remains pure; filesystem probes run outside the worker and only
+  // definitive missing-file results become diagnostics. Unknown includes denied paths.
+  async function inspectHtmlImages(result: HtmlResult, sourcePath: string, signal: AbortSignal): Promise<HtmlResult> {
+    if (typeof fileApi.probeLocalImage !== 'function') return result;
+    const targets = [...new Set(result.references.filter(r => r.kind === 'image' && /^file:/i.test(r.resolved)).map(r => r.resolved))];
+    const outcomes = new Map<string, 'available' | 'missing' | 'unknown'>();
+    let index = 0;
+    await Promise.all(Array.from({ length: Math.min(4, targets.length) }, async () => {
+      while (!signal.aborted && index < targets.length) {
+        const target = targets[index++];
+        const outcome = await fileApi.probeLocalImage(sourcePath, target).catch(() => 'unknown' as const);
+        if (!signal.aborted) outcomes.set(target, outcome);
+      }
+    }));
+    if (signal.aborted) return result;
+    const references = result.references.map(ref => outcomes.get(ref.resolved) === 'missing' && ref.kind === 'image' ? { ...ref, state: 'missing' as const } : ref);
+    const missing = references.filter(ref => ref.kind === 'image' && ref.state === 'missing');
+    if (!missing.length) return result;
+    return { ...result, status: 'degraded', references,
+      issues: [...result.issues, ...missing.map(() => ({ code: 'IMAGE_MISSING', severity: 'warning' as const, impact: 'resource' as const, message: '本地图片不存在，已保留原始引用', fallback: 'none' as const }))],
+      summary: { ...result.summary, degradedBlockCount: result.summary.degradedBlockCount + missing.length },
+    };
+  }
+
+  const importControllers = new Map<string, AbortController>();
+  async function convertImport(doc: DocState, newHtml?: string, newDisk?: HtmlImportState['sourceDisk']) {
+    if (!doc.htmlImport || doc.htmlImport.saving) return;
+    importControllers.get(doc.id)?.abort();
+    const controller = new AbortController();
+    importControllers.set(doc.id, controller);
+    const meta = doc.htmlImport;
+    const previousResult = meta.result;
+    const previousState = meta.state;
+    meta.state = 'loading';
+    try {
+      let result = await convertHTMLAsync({ requestId: `${doc.id}-${meta.generation + 1}`, html: newHtml ?? meta.sourceHtml, sourceFileUrl: fileUrl(meta.sourcePath), converterVersion: 'html-v1' }, controller.signal);
+      if (controller.signal.aborted || !documents.value.includes(doc) || doc.htmlImport !== meta) return;
+      if (result.status === 'complete' || result.status === 'degraded') result = await inspectHtmlImages(result, meta.sourcePath, controller.signal);
+      if (controller.signal.aborted || !documents.value.includes(doc) || doc.htmlImport !== meta) return;
+      if (newHtml !== undefined && previousResult && (previousState === 'complete' || previousState === 'degraded') && (result.status === 'failed' || result.status === 'unsupported')) {
+        meta.state = previousState;
+        useUiStore().flashStatus('重新转换失败，已保留原预览');
+        return;
+      }
+      meta.result = result;
+      meta.state = result.status;
+      if (newHtml !== undefined && (result.status === 'complete' || result.status === 'degraded')) { meta.sourceHtml = newHtml; meta.sourceState = 'unchanged'; if (newDisk) meta.sourceDisk = newDisk; }
+      meta.generation++;
+      if (result.status === 'complete' || result.status === 'degraded') doc.content = result.markdown;
+      if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('editor:remount-doc', { detail: { id: doc.id } }));
+    } catch (error) {
+      if (controller.signal.aborted || !documents.value.includes(doc)) return;
+      if (previousResult && (previousState === 'complete' || previousState === 'degraded')) {
+        meta.state = previousState;
+        useUiStore().flashStatus('重新转换失败，已保留原预览');
+        return;
+      }
+      meta.state = 'failed';
+      meta.result = { status: 'failed', requestId: doc.id, error: { code: 'CONVERSION_FAILED', message: String(error), retryable: true } };
+    } finally {
+      if (importControllers.get(doc.id) === controller) importControllers.delete(doc.id);
+    }
+  }
+
+  function cancelImport(doc: DocState) {
+    importControllers.get(doc.id)?.abort();
+    importControllers.delete(doc.id);
+    const meta = doc.htmlImport;
+    if (meta?.result?.status === 'complete' || meta?.result?.status === 'degraded') {
+      meta.state = meta.result.status;
+    } else closeDocument(doc.id);
+  }
+
+  async function reloadHtmlImport(doc: DocState) {
+    const meta = doc.htmlImport;
+    if (!meta || meta.saving || !meta.sourcePath) return;
+    const info = await fileApi.openFile(meta.sourcePath);
+    if (!info || !documents.value.includes(doc) || doc.htmlImport !== meta) {
+      useUiStore().flashStatus('读取源文件失败，已保留原预览');
+      return;
+    }
+    await convertImport(doc, info.content, { mtimeMs: info.mtimeMs, size: info.size, hash: info.hash });
   }
 
   function openDocument(info: FileInfo) {
@@ -122,10 +251,25 @@ export const useDocumentsStore = defineStore('documents', () => {
       return existingId;
     }
 
+    if (info.format === 'html' || /\.html?$/i.test(info.path || info.title)) {
+      const doc: DocState = {
+        id: info.id || `doc-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        path: null, title: info.title, mode: 'live', eol: 'lf', encoding: info.encoding,
+        status: 'clean', content: '',
+        htmlImport: { sourcePath: info.path, sourceState: 'unchanged', sourceDisk: { mtimeMs: info.mtimeMs, size: info.size, hash: info.hash }, state: 'loading', sourceHtml: info.content, generation: 0, saving: false },
+      };
+      documents.value.unshift(doc);
+      activeDocumentId.value = doc.id;
+      if (info.path) fileApi.addRecentFile({ path: info.path, title: info.title, accessedAt: Date.now() });
+      void convertImport(documents.value[0]);
+      return doc.id;
+    }
+
     // Reuse empty untitled clean document if single and untouched
     if (
       documents.value.length === 1 &&
       documents.value[0].path === null &&
+      !documents.value[0].htmlImport &&
       documents.value[0].status === 'clean' &&
       documents.value[0].content === ''
     ) {
@@ -158,6 +302,17 @@ export const useDocumentsStore = defineStore('documents', () => {
     activeDocumentId.value = doc.id;
     fileApi.addRecentFile({ path: info.path, title: info.title, accessedAt: Date.now() });
     return doc.id;
+  }
+
+  function restoreDraft(info: FileInfo) {
+    const existingId = checkDuplicate(info.path);
+    const existing = documents.value.find((doc) => doc.id === existingId);
+    const preserveExisting = existing && existing.status !== 'clean';
+    if (existing && !preserveExisting) closeDocument(existing.id);
+    const id = openDocument(preserveExisting ? { ...info, path: '' } : info);
+    const restored = documents.value.find((doc) => doc.id === id);
+    if (restored) restored.status = 'dirty';
+    return id;
   }
 
   async function openFileFromPath(path: string): Promise<string | null> {
@@ -202,6 +357,8 @@ export const useDocumentsStore = defineStore('documents', () => {
   }
 
   function closeDocument(id: string) {
+    importControllers.get(id)?.abort();
+    importControllers.delete(id);
     if (backupTimers.has(id)) {
       clearTimeout(backupTimers.get(id));
       backupTimers.delete(id);
@@ -226,6 +383,10 @@ export const useDocumentsStore = defineStore('documents', () => {
   function requestCloseDocument(id: string, onClosed?: () => void) {
     const doc = documents.value.find((d) => d.id === id);
     if (!doc) return;
+    if (doc.htmlImport?.saving) {
+      useUiStore().flashStatus('正在保存，请等待完成后关闭');
+      return;
+    }
 
     if (doc.status !== 'clean') {
       const uiStore = useUiStore();
@@ -272,7 +433,7 @@ export const useDocumentsStore = defineStore('documents', () => {
 
   function updateContent(id: string, content: string) {
     const doc = documents.value.find((d) => d.id === id);
-    if (!doc) return;
+    if (!doc || doc.htmlImport) return;
     if (doc.content === content) return;
     doc.content = content;
     if (doc.status === 'clean') {
@@ -281,10 +442,10 @@ export const useDocumentsStore = defineStore('documents', () => {
     scheduleDraftBackup(doc);
   }
 
-  let isSaving = false;
+  const savingDocuments = new Set<string>();
   async function saveDocument(id: string, force = false): Promise<boolean> {
-    if (isSaving) return false;
-    isSaving = true;
+    if (savingDocuments.has(id)) return false;
+    savingDocuments.add(id);
     try {
       const doc = documents.value.find((d) => d.id === id);
       if (!doc) return false;
@@ -323,13 +484,14 @@ export const useDocumentsStore = defineStore('documents', () => {
         return false;
       }
     } finally {
-      isSaving = false;
+      savingDocuments.delete(id);
     }
   }
 
   async function saveAsDocument(id: string): Promise<boolean> {
     const doc = documents.value.find((d) => d.id === id);
     if (!doc) return false;
+    if (doc.htmlImport) return saveHtmlImport(doc);
 
     const oldId = doc.id;
     const savedContent = doc.content;
@@ -354,6 +516,51 @@ export const useDocumentsStore = defineStore('documents', () => {
       return true;
     }
     return false;
+  }
+
+  async function saveHtmlImport(doc: DocState): Promise<boolean> {
+    const meta = doc.htmlImport;
+    if (!meta || meta.saving || (meta.state !== 'complete' && meta.state !== 'degraded')) return false;
+    const result = meta.result as HtmlResult;
+    const service = FileService as any;
+    if (!service.BeginHtmlSave || !service.CommitHtmlSave || !service.AbortHtmlSave) {
+      useUiStore().flashStatus('另存为服务不可用');
+      return false;
+    }
+    meta.saving = true;
+    let ticket = '';
+    try {
+      const begin = await service.BeginHtmlSave({ documentId: doc.id, sourcePath: meta.sourcePath, suggestedName: doc.title.replace(/\.html?$/i, '') + '.md', references: result.references });
+      if (!begin || begin.status === 'cancelled') return false;
+      if (begin.status !== 'ready') throw new Error(begin.message || '准备另存为失败');
+      ticket = begin.ticket;
+      const duplicate = checkDuplicate(begin.targetPath);
+      if (duplicate && duplicate !== doc.id) throw new Error('目标文件已在其他标签打开，请先关闭该标签');
+      const markdown = rewriteReferences(doc.content, begin.rewrites || []);
+      const eol = useSettingsStore().settings.defaultEol;
+      const saved = await service.CommitHtmlSave({ ticket, markdown, eol });
+      if (!saved || saved.status !== 'saved') throw new Error(saved?.message || '保存失败');
+      ticket = '';
+      if (!documents.value.includes(doc) || doc.htmlImport !== meta) return true;
+      doc.path = saved.path;
+      doc.title = saved.path.split(/[/\\]/).pop() || doc.title;
+      doc.content = markdown;
+      doc.eol = eol;
+      doc.encoding = 'utf8';
+      doc.disk = saved.disk;
+      doc.status = 'clean';
+      delete doc.htmlImport;
+      fileApi.addRecentFile({ path: saved.path, title: doc.title, accessedAt: Date.now() });
+      if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('editor:remount-doc', { detail: { id: doc.id } }));
+      if (begin.warnings?.length) useUiStore().flashStatus(begin.warnings.join('；'));
+      return true;
+    } catch (error) {
+      useUiStore().flashStatus(`另存为失败：${error instanceof Error ? error.message : String(error)}`);
+      return false;
+    } finally {
+      if (ticket) await service.AbortHtmlSave({ ticket }).catch(() => {});
+      meta.saving = false;
+    }
   }
 
   async function reloadFromDisk(id: string) {
@@ -383,6 +590,17 @@ export const useDocumentsStore = defineStore('documents', () => {
 
   async function handleExternalFileEvent(path: string) {
     const norm = path.replace(/\\/g, '/').toLowerCase();
+    const imported = documents.value.find(d => d.htmlImport?.sourcePath.replace(/\\/g, '/').toLowerCase() === norm);
+    if (imported?.htmlImport) {
+      const meta = imported.htmlImport;
+      const disk = meta.sourceDisk;
+      const generation = meta.generation;
+      const status = await fileApi.checkStatus(imported.id, meta.sourcePath, disk.hash, disk.mtimeMs, disk.size);
+      if (!documents.value.includes(imported) || imported.htmlImport !== meta || meta.generation !== generation) return;
+      meta.sourceState = status?.status === 'deleted' ? 'deleted' : status?.status === 'conflict' ? 'changed' : status?.status === 'clean' ? 'unchanged' : 'unknown';
+      if (status?.status === 'clean' && status.disk) meta.sourceDisk = status.disk;
+      return;
+    }
     const doc = documents.value.find((d) => d.path && d.path.replace(/\\/g, '/').toLowerCase() === norm);
     if (!doc || !doc.path) return;
 
@@ -434,6 +652,10 @@ export const useDocumentsStore = defineStore('documents', () => {
     createNewDocument,
     checkDuplicate,
     openDocument,
+    convertImport,
+    cancelImport,
+    reloadHtmlImport,
+    restoreDraft,
     openFileFromPath,
     switchDocument,
     closeDocument,

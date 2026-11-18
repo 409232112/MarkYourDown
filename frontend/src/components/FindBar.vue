@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
 import { useUiStore } from '../stores/ui';
+import { useDocumentsStore } from '../stores/documents';
 import { i18n } from '../i18n/zh-CN';
 
 const uiStore = useUiStore();
+const docsStore = useDocumentsStore();
 
 const query = ref('');
 const replaceQuery = ref('');
@@ -109,7 +111,7 @@ onUnmounted(() => {
     </div>
 
     <!-- Replace row if mode is replace -->
-    <div v-if="uiStore.findBarMode === 'replace'" class="replace-row">
+    <div v-if="uiStore.findBarMode === 'replace' && !docsStore.activeDocument?.htmlImport" class="replace-row">
       <input
         v-model="replaceQuery"
         type="text"

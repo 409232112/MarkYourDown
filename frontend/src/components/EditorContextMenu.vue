@@ -4,6 +4,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue';
 const props = defineProps<{
   x: number;
   y: number;
+  readOnly?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -31,6 +32,7 @@ const adjustedPos = computed(() => {
 });
 
 function handleAction(action: string, payload?: any) {
+  if (props.readOnly && !['copy', 'copy-plain-text', 'copy-markdown', 'copy-html', 'select-all'].includes(action)) return;
   emit('action', { action, payload });
   emit('close');
 }
@@ -67,7 +69,7 @@ onUnmounted(() => {
   >
     <!-- Top Quick Action Icons: Cut, Copy, Paste, Delete -->
     <div class="quick-icons-row">
-      <button class="icon-btn" title="剪切 (Ctrl+X)" @click="handleAction('cut')">
+      <button class="icon-btn" :disabled="readOnly" title="剪切 (Ctrl+X)" @click="handleAction('cut')">
         <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5">
           <circle cx="5" cy="5" r="2.2" />
           <circle cx="5" cy="11" r="2.2" />
@@ -80,13 +82,13 @@ onUnmounted(() => {
           <path d="M3 11V3.5A.5.5 0 0 1 3.5 3H11" />
         </svg>
       </button>
-      <button class="icon-btn" title="粘贴 (Ctrl+V)" @click="handleAction('paste')">
+      <button class="icon-btn" :disabled="readOnly" title="粘贴 (Ctrl+V)" @click="handleAction('paste')">
         <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5">
           <rect x="3" y="4" width="10" height="10" rx="1.5" />
           <path d="M6 4V2.5A.5.5 0 0 1 6.5 2h3a.5.5 0 0 1 .5.5V4" />
         </svg>
       </button>
-      <button class="icon-btn" title="删除" @click="handleAction('delete')">
+      <button class="icon-btn" :disabled="readOnly" title="删除" @click="handleAction('delete')">
         <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5">
           <path d="M3 4h10M6 4V2.5h4V4M4.5 4v9a1 1 0 0 0 1 1h5a1 1 0 0 0 1-1V4" />
         </svg>
@@ -110,7 +112,7 @@ onUnmounted(() => {
     </div>
 
     <!-- Inline Format Toolbar Icons (Bold, Italic, Code, Link, Quote, Bullet list, Number list, Task list) -->
-    <div class="format-icons-row">
+    <div class="format-icons-row" :class="{ disabled: readOnly }" :title="readOnly ? '请先另存为 Markdown' : undefined">
       <button class="format-btn bold" title="加粗 (Ctrl+B)" @click="handleAction('bold')">B</button>
       <button class="format-btn italic" title="斜体 (Ctrl+I)" @click="handleAction('italic')">I</button>
       <button class="format-btn code" title="代码 (Ctrl+Shift+`)" @click="handleAction('inlineCode')">&lt;/&gt;</button>
@@ -126,6 +128,9 @@ onUnmounted(() => {
     <!-- 段落 Submenu -->
     <div
       class="menu-item has-submenu"
+      :class="{ 'readonly-disabled': readOnly }"
+      :aria-disabled="readOnly"
+      :title="readOnly ? '请先另存为 Markdown 后编辑' : undefined"
       @mouseenter="activeSubmenu = 'paragraph'"
       @mouseleave="activeSubmenu = null"
     >
@@ -176,6 +181,9 @@ onUnmounted(() => {
     <!-- 插入 Submenu -->
     <div
       class="menu-item has-submenu"
+      :class="{ 'readonly-disabled': readOnly }"
+      :aria-disabled="readOnly"
+      :title="readOnly ? '请先另存为 Markdown 后编辑' : undefined"
       @mouseenter="activeSubmenu = 'insert'"
       @mouseleave="activeSubmenu = null"
     >
@@ -219,6 +227,9 @@ onUnmounted(() => {
     <!-- 表格 Submenu -->
     <div
       class="menu-item has-submenu"
+      :class="{ 'readonly-disabled': readOnly }"
+      :aria-disabled="readOnly"
+      :title="readOnly ? '请先另存为 Markdown 后编辑' : undefined"
       @mouseenter="activeSubmenu = 'table-ops'"
       @mouseleave="activeSubmenu = null"
     >
@@ -253,6 +264,9 @@ onUnmounted(() => {
   font-family: var(--font-sans);
   animation: fadeIn 100ms ease-out;
 }
+
+.disabled, button:disabled, .readonly-disabled { opacity: .45; }
+.disabled { pointer-events: none; }
 
 .quick-icons-row {
   display: flex;

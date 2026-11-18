@@ -43,7 +43,11 @@ function handleMaximize() {
 }
 
 function handleClose() {
-  const dirtyDoc = docsStore.documents.find((d) => d.status === 'dirty');
+  if (docsStore.documents.some(d => d.htmlImport?.saving)) {
+    uiStore.flashStatus('正在保存，请等待完成后关闭窗口');
+    return;
+  }
+  const dirtyDoc = docsStore.documents.find((d) => d.status !== 'clean');
   if (dirtyDoc) {
     docsStore.requestCloseDocument(dirtyDoc.id, () => {
       handleClose();
@@ -94,6 +98,10 @@ async function handleSaveAs() {
 
 async function handleExportHtml() {
   closeMenu();
+  if (docsStore.activeDocument?.htmlImport) {
+    uiStore.flashStatus('请先另存为 Markdown 后导出');
+    return;
+  }
   if (docsStore.activeDocument) {
     const docPath = docsStore.activeDocument.path || '';
     const res = await exportApi.exportDocumentToHtml(
@@ -240,7 +248,7 @@ onUnmounted(() => {
             <span>{{ i18n.menu.find }}</span>
             <span class="shortcut">Ctrl+F</span>
           </div>
-          <div class="menu-item" @click="uiStore.openFind('replace'); closeMenu()">
+          <div class="menu-item" @click="uiStore.openFind(docsStore.activeDocument?.htmlImport ? 'find' : 'replace'); if (docsStore.activeDocument?.htmlImport) uiStore.flashStatus('另存为 Markdown 后可替换'); closeMenu()">
             <span>{{ i18n.menu.replace }}</span>
             <span class="shortcut">Ctrl+H</span>
           </div>

@@ -27,6 +27,7 @@ export interface LiveEditorOptions extends EditorKeymapCallbacks, CodeBlockOptio
   docPath?: string | null;
   getDocPath?: () => string | null | undefined;
   readOnly?: boolean;
+  allowReadOnlyCaret?: boolean;
   onChange?: (markdown: string) => void;
   onDocChange?: (doc: PMNode) => void;
   onCursorChange?: (pos: number) => void;
@@ -58,6 +59,15 @@ export async function createLiveEditor(
 
   let serializeNode: ((node: any) => string) | null = null;
   let parseMarkdown: ((text: string) => PMNode | null | undefined) | null = null;
+
+  const readOnlyPlugin = new Plugin({
+    key: new PluginKey('myd-read-only'),
+    filterTransaction: (tr) => {
+      if (!options.readOnly || !tr.docChanged) return true;
+      return false;
+    },
+    props: { editable: () => !options.readOnly || !!options.allowReadOnlyCaret },
+  });
 
   const markdownPastePlugin = new Plugin({
     key: new PluginKey('myd-markdown-paste'),
@@ -109,6 +119,7 @@ export async function createLiveEditor(
 
       // Register custom ProseMirror plugins
       ctx.update(prosePluginsCtx, (prev) => [
+        readOnlyPlugin,
         markdownPastePlugin,
         ...prev,
         docUpdatePlugin,

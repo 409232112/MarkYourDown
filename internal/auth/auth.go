@@ -208,7 +208,7 @@ func (m *Manager) ValidateFileRead(p string) (string, error) {
 
 	ext := strings.ToLower(filepath.Ext(norm))
 	switch ext {
-	case ".md", ".markdown", ".mdown", ".txt":
+	case ".md", ".markdown", ".mdown", ".txt", ".html", ".htm":
 		// allowed
 	default:
 		return "", fmt.Errorf("file extension %s is not permitted for document reading", ext)

@@ -11,6 +11,7 @@ import TitleBar from './components/TitleBar.vue';
 import Sidebar from './components/Sidebar.vue';
 import StatusBar from './components/StatusBar.vue';
 import NoticeBar from './components/NoticeBar.vue';
+import HtmlImportNotice from './components/HtmlImportNotice.vue';
 import FindBar from './components/FindBar.vue';
 import Welcome from './components/Welcome.vue';
 import EditorHost from './components/EditorHost.vue';
@@ -66,7 +67,9 @@ async function handleDrop(e: DragEvent) {
       lowerName.endsWith('.md') ||
       lowerName.endsWith('.markdown') ||
       lowerName.endsWith('.mdown') ||
-      lowerName.endsWith('.txt')
+      lowerName.endsWith('.txt') ||
+      lowerName.endsWith('.html') ||
+      lowerName.endsWith('.htm')
     ) {
       const reader = new FileReader();
       reader.onload = () => {
@@ -76,6 +79,7 @@ async function handleDrop(e: DragEvent) {
           path: '',
           title: file.name,
           content,
+          format: /\.html?$/i.test(file.name) ? 'html' : 'markdown',
           encoding: 'utf8',
           eol: content.includes('\r\n') ? 'crlf' : 'lf',
           mtimeMs: file.lastModified || Date.now(),
@@ -157,6 +161,10 @@ function handleGlobalKeydown(e: KeyboardEvent) {
   // Export HTML: Ctrl+Shift+E
   if (isCtrlOrMeta && e.shiftKey && e.key.toLowerCase() === 'e') {
     e.preventDefault();
+    if (docsStore.activeDocument?.htmlImport) {
+      uiStore.flashStatus('请先另存为 Markdown 后导出');
+      return;
+    }
     if (docsStore.activeDocument) {
       exportApi
         .exportDocumentToHtml(docsStore.activeDocument.title, docsStore.activeDocument.content, {
@@ -204,7 +212,10 @@ function handleGlobalKeydown(e: KeyboardEvent) {
   // Replace: Ctrl+H
   if (isCtrlOrMeta && !e.shiftKey && e.key.toLowerCase() === 'h') {
     e.preventDefault();
-    uiStore.openFind('replace');
+    if (docsStore.activeDocument?.htmlImport) {
+      uiStore.openFind('find');
+      uiStore.flashStatus('另存为 Markdown 后可替换');
+    } else uiStore.openFind('replace');
     return;
   }
 
@@ -240,7 +251,7 @@ function handleGlobalKeydown(e: KeyboardEvent) {
 }
 
 onMounted(() => {
-  settingsStore.load();
+  const settingsLoaded = settingsStore.load();
   window.addEventListener('keydown', handleGlobalKeydown);
   window.addEventListener('dragover', handleDragOver);
   window.addEventListener('drop', handleDrop);
@@ -273,82 +284,107 @@ onMounted(() => {
   }
 
   // Check crash recovery backups (R2 & R5)
-  backupApi.listBackups().then((backups) => {
+  async function restoreStartup() {
+    await settingsLoaded;
+    const backups = await backupApi.listBackups();
     if (backups && backups.length > 0) {
-      const discardAll = () => {
-        for (const b of backups) {
-          backupApi.removeBackup(b.id);
-        }
-        uiStore.closeConfirm();
-      };
-
-      uiStore.showConfirm({
-        title: i18n.dialog.recoveryTitle,
-        message: i18n.dialog.recoveryMessage.replace('{n}', String(backups.length)),
-        confirmText: i18n.dialog.recoveryConfirm,
-        cancelText: i18n.dialog.recoveryCancel,
-        onConfirm: async () => {
+      await new Promise<void>((resolve) => {
+        const discardAll = () => {
           for (const b of backups) {
-            let targetPath = b.path || '';
-            if (targetPath) {
-              const ok = await backupApi.authorizeRestoredDraft(b.id);
-              if (!ok) {
-                targetPath = ''; // File was deleted or unauthorized, treat as untitled
-              }
-            }
-            docsStore.openDocument({
-              id: b.id,
-              path: targetPath,
-              title: b.title || '恢复文档',
-              content: b.content || '',
-              encoding: b.encoding || 'utf8',
-              eol: b.eol || 'crlf',
-              mtimeMs: b.savedAt || Date.now(),
-              size: (b.content || '').length,
-              hash: b.baseHash || '',
-            });
-            const restored = docsStore.documents.find((d) => d.id === b.id);
-            if (restored) restored.status = 'dirty';
+            backupApi.removeBackup(b.id);
           }
           uiStore.closeConfirm();
-        },
-        onCancel: discardAll,
+          resolve();
+        };
+
+        uiStore.showConfirm({
+          title: i18n.dialog.recoveryTitle,
+          message: i18n.dialog.recoveryMessage.replace('{n}', String(backups.length)),
+          confirmText: i18n.dialog.recoveryConfirm,
+          cancelText: i18n.dialog.recoveryCancel,
+          onConfirm: async () => {
+            for (const b of backups) {
+              let targetPath = b.path || '';
+              if (targetPath) {
+                const ok = await backupApi.authorizeRestoredDraft(b.id);
+                if (!ok) {
+                  targetPath = ''; // File was deleted or unauthorized, treat as untitled
+                }
+              }
+              docsStore.restoreDraft({
+                id: b.id,
+                path: targetPath,
+                title: b.title || '恢复文档',
+                content: b.content || '',
+                encoding: b.encoding || 'utf8',
+                eol: b.eol || 'crlf',
+                mtimeMs: b.savedAt || Date.now(),
+                size: (b.content || '').length,
+                hash: b.baseHash || '',
+              });
+            }
+            uiStore.closeConfirm();
+            resolve();
+          },
+          onCancel: discardAll,
+        });
       });
     }
-  });
 
-  // Restore session if configured (R5)
-  if (settingsStore.settings.startupAction === 'restore') {
-    backupApi.loadSession().then((session) => {
+    // Restore session if configured (R5)
+    if (settingsStore.settings.startupAction === 'restore') {
+      const session = await backupApi.loadSession();
       if (session && session.tabs && session.tabs.length > 0) {
+        let restoredActiveId: string | null = null;
         for (const tab of session.tabs) {
-          if (tab.path) {
-            docsStore.openFileFromPath(tab.path);
+          const source = tab.sourcePath || tab.path;
+          if (!source) continue;
+          const id = await docsStore.openFileFromPath(source);
+          if (!id) {
+            if (tab.kind === 'html-preview' || /\.html?$/i.test(source)) uiStore.flashStatus(`无法恢复 HTML：${tab.title || source}`);
+            continue;
           }
+          const doc = docsStore.documents.find((item) => item.id === id);
+          if (doc) {
+            if (tab.mode === 'live' || tab.mode === 'source') doc.mode = tab.mode;
+            if (tab.cursor !== undefined) doc.cursor = tab.cursor;
+            if (typeof tab.scrollTop === 'number') doc.scrollTop = tab.scrollTop;
+          }
+          if (tab.id === session.activeTabId) restoredActiveId = id;
         }
+        if (restoredActiveId) docsStore.switchDocument(restoredActiveId);
         if (session.workspacePath) {
-          wsStore.openFolderPath(session.workspacePath);
+          await wsStore.openFolderPath(session.workspacePath);
         }
       }
-    });
+    } else if (settingsStore.settings.startupAction === 'blank' && docsStore.documents.length === 0) {
+      docsStore.createNewDocument();
+    }
   }
+  void restoreStartup().catch((error) => console.error('Startup restoration failed', error));
 
   window.addEventListener('beforeunload', handleBeforeUnload);
 
   // Check external change on window focus (unified with handleExternalFileEvent)
   window.addEventListener('focus', () => {
     const doc = docsStore.activeDocument;
-    if (doc && doc.path) {
-      docsStore.handleExternalFileEvent(doc.path);
+    const path = doc?.htmlImport?.sourcePath || doc?.path;
+    if (path) {
+      docsStore.handleExternalFileEvent(path);
     }
   });
 });
 
 function handleBeforeUnload() {
   if (settingsStore.settings.startupAction !== 'restore') return;
+  window.dispatchEvent(new Event('editor:snapshot-session'));
   const tabs = docsStore.documents.map((d) => ({
     id: d.id,
-    path: d.path || '',
+    path: d.htmlImport?.sourcePath || d.path || '',
+    kind: d.htmlImport ? 'html-preview' : 'markdown',
+    sourcePath: d.htmlImport?.sourcePath || '',
+    cursor: d.cursor,
+    scrollTop: d.scrollTop,
     title: d.title,
     mode: d.mode,
   }));
@@ -386,6 +422,7 @@ onUnmounted(() => {
       <div class="editor-area">
         <!-- Non-modal NoticeBar for conflict/deleted/failed -->
         <NoticeBar />
+        <HtmlImportNotice />
 
         <!-- Floating FindBar -->
         <FindBar />

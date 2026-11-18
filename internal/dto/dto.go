@@ -9,6 +9,7 @@ type DiskFingerprint struct {
 
 // DocumentPayload is returned when a document is opened or reloaded.
 type DocumentPayload struct {
+	Format    string          `json:"format"` // "markdown" | "html"
 	ID        string          `json:"id"`
 	Path      string          `json:"path"`
 	Title     string          `json:"title"`
@@ -101,38 +102,42 @@ type BackupItem struct {
 
 // SessionTab represents a tab state in the saved session.
 type SessionTab struct {
-	ID    string `json:"id"`
-	Path  string `json:"path,omitempty"`
-	Title string `json:"title"`
-	Mode  string `json:"mode"` // "live" | "source"
+	Kind       string   `json:"kind,omitempty"`
+	SourcePath string   `json:"sourcePath,omitempty"`
+	Cursor     *int     `json:"cursor,omitempty"`
+	ScrollTop  *float64 `json:"scrollTop,omitempty"`
+	ID         string   `json:"id"`
+	Path       string   `json:"path,omitempty"`
+	Title      string   `json:"title"`
+	Mode       string   `json:"mode"` // "live" | "source"
 }
 
 // SessionData stores overall window and document session state.
 type SessionData struct {
-	ActiveTabID    string       `json:"activeTabId"`
-	Tabs           []SessionTab `json:"tabs"`
-	WorkspacePath  string       `json:"workspacePath,omitempty"`
-	SidebarActive  string       `json:"sidebarActive,omitempty"` // "outline" | "files"
-	SidebarOpen    bool         `json:"sidebarOpen"`
+	ActiveTabID   string       `json:"activeTabId"`
+	Tabs          []SessionTab `json:"tabs"`
+	WorkspacePath string       `json:"workspacePath,omitempty"`
+	SidebarActive string       `json:"sidebarActive,omitempty"` // "outline" | "files"
+	SidebarOpen   bool         `json:"sidebarOpen"`
 }
 
 // AppSettings stores user configurations aligned with frontend Pinia store.
 type AppSettings struct {
 	// Appearance
-	Theme       string  `json:"theme"`
-	ContentFont string  `json:"contentFont"`
-	FontSize    int     `json:"fontSize"`
-	LineHeight  float64 `json:"lineHeight"`
-	ContentWidth int    `json:"contentWidth"`
+	Theme        string  `json:"theme"`
+	ContentFont  string  `json:"contentFont"`
+	FontSize     int     `json:"fontSize"`
+	LineHeight   float64 `json:"lineHeight"`
+	ContentWidth int     `json:"contentWidth"`
 
 	// General
-	StartupAction   string `json:"startupAction"`
-	AutoSave        bool   `json:"autoSave"`
-	AutoSaveInterval int   `json:"autoSaveInterval"`
-	AutoSaveOnBlur  bool   `json:"autoSaveOnBlur"`
-	DefaultEOL      string `json:"defaultEol"`
-	DefaultEncoding string `json:"defaultEncoding"`
-	ImageDir        string `json:"imageDir"`
+	StartupAction    string `json:"startupAction"`
+	AutoSave         bool   `json:"autoSave"`
+	AutoSaveInterval int    `json:"autoSaveInterval"`
+	AutoSaveOnBlur   bool   `json:"autoSaveOnBlur"`
+	DefaultEOL       string `json:"defaultEol"`
+	DefaultEncoding  string `json:"defaultEncoding"`
+	ImageDir         string `json:"imageDir"`
 
 	// Editor
 	SoftWrap           bool   `json:"softWrap"`

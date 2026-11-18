@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,6 +45,8 @@ type FileService struct {
 
 // NewFileService creates a new FileService.
 func NewFileService(settingsSvc *SettingsService, backupSvc *BackupService) *FileService {
+	// Recovery is best-effort and must not delay application startup.
+	go htmlCleanupOnStartup()
 	fs := &FileService{
 		docLocks:     make(map[string]*sync.Mutex),
 		settingsSvc:  settingsSvc,
@@ -123,6 +126,8 @@ func (s *FileService) OpenFileDialog() (*dto.DocumentPayload, error) {
 	}
 
 	dialog := app.Dialog.OpenFile()
+	dialog.AddFilter("支持的文档 (*.md;*.markdown;*.mdown;*.txt;*.html;*.htm)", "*.md;*.markdown;*.mdown;*.txt;*.html;*.htm")
+	dialog.AddFilter("HTML 文档 (*.html;*.htm)", "*.html;*.htm")
 	dialog.AddFilter("Markdown 文档 (*.md;*.markdown;*.mdown;*.txt)", "*.md;*.markdown;*.mdown;*.txt")
 	dialog.AddFilter("所有文件 (*.*)", "*.*")
 
@@ -143,11 +148,28 @@ func (s *FileService) openSelectedFile(chosenPath string) (*dto.DocumentPayload,
 	if err != nil {
 		return nil, err
 	}
-	return s.OpenFileByPath(path)
+	doc, err := s.OpenFileByPath(path)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return doc, nil
 }
 
 // OpenFileByPath validates and reads a file directly from a given path (must be pre-authorized via dialog, drag-and-drop, CLI, or session).
 func (s *FileService) OpenFileByPath(filePath string) (*dto.DocumentPayload, error) {
+	return s.openFileByPath(filePath, "")
+}
+
+// OpenHtmlWithEncoding retries an authorized HTML file with an explicit encoding.
+func (s *FileService) OpenHtmlWithEncoding(filePath, encoding string) (*dto.DocumentPayload, error) {
+	ext := strings.ToLower(filepath.Ext(filePath))
+	if ext != ".html" && ext != ".htm" {
+		return nil, errors.New("not an HTML file")
+	}
+	return s.openFileByPath(filePath, encoding)
+}
+
+func (s *FileService) openFileByPath(filePath, encodingOverride string) (*dto.DocumentPayload, error) {
 	normPath, err := auth.NormalizePath(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("invalid file path: %w", err)
@@ -169,12 +191,12 @@ func (s *FileService) OpenFileByPath(filePath string) (*dto.DocumentPayload, err
 		return nil, ErrFileTooLarge
 	}
 
-	rawBytes, err := os.ReadFile(validPath)
+	rawBytes, err := readDocumentBytes(validPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
 
-	decoded, err := filesystem.DecodeFileContent(rawBytes)
+	decoded, format, err := decodeOpenedDocument(validPath, rawBytes, encodingOverride)
 	if err != nil {
 		return nil, err
 	}
@@ -194,6 +216,7 @@ func (s *FileService) OpenFileByPath(filePath string) (*dto.DocumentPayload, err
 	docID := hex.EncodeToString(randBytes)
 
 	return &dto.DocumentPayload{
+		Format:    format,
 		ID:        docID,
 		Path:      validPath,
 		Title:     title,
@@ -213,6 +236,10 @@ func (s *FileService) OpenFileByPath(filePath string) (*dto.DocumentPayload, err
 func (s *FileService) SaveFile(req dto.SaveFileRequest) (*dto.SaveFileResponse, error) {
 	if req.Path == "" {
 		return s.SaveFileAs(req)
+	}
+
+	if ext := strings.ToLower(filepath.Ext(req.Path)); ext == ".html" || ext == ".htm" {
+		return nil, errors.New("HTML 源文件不能作为 Markdown 保存目标")
 	}
 
 	validPath, err := auth.Default().ValidateFileWrite(req.Path)
@@ -425,17 +452,18 @@ func (s *FileService) ReloadFile(docID, filePath string) (*dto.DocumentPayload, 
 		return nil, err
 	}
 
-	rawBytes, err := os.ReadFile(validPath)
+	rawBytes, err := readDocumentBytes(validPath)
 	if err != nil {
 		return nil, err
 	}
 
-	decoded, err := filesystem.DecodeFileContent(rawBytes)
+	decoded, format, err := decodeOpenedDocument(validPath, rawBytes, "")
 	if err != nil {
 		return nil, err
 	}
 
 	return &dto.DocumentPayload{
+		Format:    format,
 		ID:        docID,
 		Path:      validPath,
 		Title:     filepath.Base(validPath),
@@ -549,6 +577,13 @@ func (s *FileService) SaveImage(req dto.SaveImageRequest) (*dto.SaveImageRespons
 
 // GetImageToken generates an opaque token URL for a relative image path.
 func (s *FileService) GetImageToken(docPath, imgPath string) (string, error) {
+	if strings.HasPrefix(strings.ToLower(imgPath), "file:") {
+		path, err := htmlLocalPath(imgPath)
+		if err != nil {
+			return "", err
+		}
+		imgPath = path
+	}
 	_, tokenURL, err := assets.DefaultRegistry().GenerateToken(docPath, imgPath)
 	return tokenURL, err
 }
@@ -600,4 +635,32 @@ func (s *FileService) ReadImageAsDataURL(docPath, imgPath string) (string, error
 // CloseFile cleans up resources when a document is closed.
 func (s *FileService) CloseFile(docID string) {
 	_ = s.backupSvc.RemoveBackup(docID)
+}
+
+// decodeOpenedDocument keeps HTML encoding detection independent from Markdown.
+func decodeOpenedDocument(path string, raw []byte, encodingOverride string) (*filesystem.DecodedText, string, error) {
+	ext := strings.ToLower(filepath.Ext(path))
+	if ext == ".html" || ext == ".htm" {
+		d, err := filesystem.DecodeHTMLContent(raw, encodingOverride)
+		return d, "html", err
+	}
+	d, err := filesystem.DecodeFileContent(raw)
+	return d, "markdown", err
+}
+
+// readDocumentBytes enforces the size cap even if a file grows after stat.
+func readDocumentBytes(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, MaxDocumentBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > MaxDocumentBytes {
+		return nil, ErrFileTooLarge
+	}
+	return data, nil
 }

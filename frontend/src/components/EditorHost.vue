@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { insertStructuredAction } from '../editor/live/insertAction';
 import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue';
 import { useDocumentsStore } from '../stores/documents';
 import { useSettingsStore } from '../stores/settings';
@@ -33,7 +34,14 @@ const containerRef = ref<HTMLElement | null>(null);
 
 let liveEditorInstance: LiveEditorInstance | null = null;
 let sourceEditorInstance: SourceEditorInstance | null = null;
-let autoSaveTimer: any = null;
+const autoSaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const editorCache = new Map<string, {live: LiveEditorInstance | null; source: SourceEditorInstance | null; nodes: Node[]; content: string; scrollTop: number; sourceScrollTop: number}>();
+let mountQueue = Promise.resolve();
+let disposed = false;
+function mountEditor() {
+  mountQueue = mountQueue.then(mountEditorNow).catch(console.error);
+  return mountQueue;
+}
 
 // Track active doc id & mode to prevent unnecessary remounts
 let currentMountedDocId: string | null = null;
@@ -54,7 +62,7 @@ function handleContextMenuAction(data: { action: string; payload?: any }) {
 
 function handleContainerClick(e: MouseEvent) {
   const target = e.target as HTMLElement | null;
-  if (!target) return;
+  if (!target || target.closest('.ProseMirror, .cm-editor')) return;
   if (
     target.closest('button') ||
     target.closest('input') ||
@@ -113,7 +121,31 @@ let currentMatches: MatchPos[] = [];
 let currentMatchIndex = -1;
 let lastSearchQuery = '';
 
+function captureHtmlViewState() {
+  const doc = docsStore.documents.find(d => d.id === currentMountedDocId);
+  if (!doc?.htmlImport || doc.htmlImport.state === 'loading') return;
+  if (currentMountedMode === 'live' && liveEditorInstance) {
+    doc.cursor = liveEditorInstance.getPmPos();
+    doc.scrollTop = containerRef.value?.parentElement?.scrollTop || 0;
+  } else if (currentMountedMode === 'source' && sourceEditorInstance) {
+    doc.cursor = sourceEditorInstance.getCursor();
+    doc.scrollTop = sourceEditorInstance.getScrollTop();
+  }
+}
+
 async function destroyCurrentEditor() {
+  captureHtmlViewState();
+  const oldDoc = docsStore.documents.find(d => d.id === currentMountedDocId);
+  if (oldDoc && currentMountedMode && containerRef.value) {
+    editorCache.set(`${oldDoc.id}:${currentMountedMode}`, {
+      live: liveEditorInstance, source: sourceEditorInstance,
+      nodes: Array.from(containerRef.value.childNodes), content: oldDoc.content,
+      scrollTop: containerRef.value.parentElement?.scrollTop || 0,
+      sourceScrollTop: sourceEditorInstance?.getScrollTop() || 0,
+    });
+    liveEditorInstance = null;
+    sourceEditorInstance = null;
+  }
   if (liveEditorInstance) {
     try {
       await liveEditorInstance.destroy();
@@ -145,20 +177,21 @@ function triggerAutoSave() {
   const doc = docsStore.activeDocument;
   if (!doc || !doc.path || doc.status === 'conflict' || doc.status === 'deleted') return;
 
-  if (autoSaveTimer) {
-    clearTimeout(autoSaveTimer);
-  }
-  autoSaveTimer = setTimeout(async () => {
+  clearTimeout(autoSaveTimers.get(doc.id));
+  autoSaveTimers.set(doc.id, setTimeout(async () => {
+    autoSaveTimers.delete(doc.id);
+    if (!settingsStore.settings.autoSave || !docsStore.documents.some(d => d.id === doc.id)) return;
     if (doc.status === 'dirty') {
       const ok = await docsStore.saveDocument(doc.id);
       if (ok) {
         uiStore.flashStatus(i18n.app.saved);
       }
     }
-  }, (settingsStore.settings.autoSaveInterval || 3) * 1000);
+  }, (settingsStore.settings.autoSaveInterval || 3) * 1000));
 }
 
-async function mountEditor() {
+async function mountEditorNow() {
+  if (disposed) return;
   const doc = docsStore.activeDocument;
   if (!doc || !containerRef.value) {
     await destroyCurrentEditor();
@@ -171,15 +204,38 @@ async function mountEditor() {
   }
 
   await destroyCurrentEditor();
+  if (disposed || !containerRef.value) return;
   currentMountedDocId = doc.id;
   currentMountedMode = doc.mode;
 
+  const cacheKey = `${doc.id}:${doc.mode}`;
+  const cached = editorCache.get(cacheKey);
+  if (cached) {
+    editorCache.delete(cacheKey);
+    if (cached.content === doc.content) {
+      containerRef.value.replaceChildren(...cached.nodes);
+      liveEditorInstance = cached.live;
+      sourceEditorInstance = cached.source;
+      liveEditorInstance?.getView()?.focus();
+      sourceEditorInstance?.focus();
+      sourceEditorInstance?.view.requestMeasure();
+      sourceEditorInstance?.setScrollTop(cached.sourceScrollTop);
+      if (containerRef.value.parentElement) containerRef.value.parentElement.scrollTop = cached.scrollTop;
+      return;
+    }
+    await cached.live?.destroy();
+    cached.source?.destroy();
+  }
+  const editorRoot = document.createElement('div');
+  containerRef.value.appendChild(editorRoot);
   if (doc.mode === 'live') {
     try {
-      liveEditorInstance = await createLiveEditor(containerRef.value, {
+      liveEditorInstance = await createLiveEditor(editorRoot, {
         initialText: doc.content,
-        docPath: doc.path,
-        getDocPath: () => docsStore.activeDocument?.path || doc.path,
+        docPath: doc.htmlImport?.sourcePath || doc.path,
+        getDocPath: () => doc.htmlImport?.sourcePath || doc.path,
+        readOnly: !!doc.htmlImport,
+        allowReadOnlyCaret: !!doc.htmlImport,
         onChange: (markdown: string) => {
           if (doc.id === docsStore.activeDocumentId) {
             docsStore.updateContent(doc.id, markdown);
@@ -193,16 +249,28 @@ async function mountEditor() {
           docsStore.saveDocument(doc.id);
         },
       });
+      if (disposed) {
+        await liveEditorInstance.destroy();
+        liveEditorInstance = null;
+        return;
+      }
       await nextTick();
-      liveEditorInstance.focus();
+      if (disposed) return;
+      liveEditorInstance?.focus();
+      if (doc.htmlImport && doc.htmlImport.state !== 'loading') {
+        if (typeof doc.cursor === 'number') liveEditorInstance?.setPmPos(doc.cursor);
+        if (containerRef.value.parentElement && typeof doc.scrollTop === 'number') containerRef.value.parentElement.scrollTop = doc.scrollTop;
+      }
     } catch (e) {
       console.error('Failed to mount Live Editor:', e);
       // Fallback to source mode if live mount fails
       doc.mode = 'source';
     }
   } else {
-    sourceEditorInstance = createSourceEditor(containerRef.value, {
+    sourceEditorInstance = createSourceEditor(editorRoot, {
       initialText: doc.content,
+      readOnly: !!doc.htmlImport,
+      allowReadOnlyCaret: !!doc.htmlImport,
       showLineNumbers: settingsStore.settings.codeLineNumbers,
       wordWrap: settingsStore.settings.softWrap,
       onChange: (text: string) => {
@@ -219,6 +287,10 @@ async function mountEditor() {
       },
     });
     sourceEditorInstance.focus();
+    if (doc.htmlImport && doc.htmlImport.state !== 'loading') {
+      if (typeof doc.cursor === 'number') sourceEditorInstance.setCursor(doc.cursor);
+      if (typeof doc.scrollTop === 'number') sourceEditorInstance.setScrollTop(doc.scrollTop);
+    }
   }
 }
 
@@ -234,10 +306,10 @@ function handleToggleMode() {
       if (pmDoc) {
         offset = pmToCmCursor(pmDoc, pos);
       }
-      doc.content = liveEditorInstance.getMarkdown();
+      if (!doc.htmlImport) doc.content = liveEditorInstance.getMarkdown();
     }
     doc.mode = 'source';
-    nextTick(() => {
+    void mountEditor().then(() => {
       if (sourceEditorInstance) {
         sourceEditorInstance.setCursor(offset);
       }
@@ -247,10 +319,10 @@ function handleToggleMode() {
     if (sourceEditorInstance) {
       const offset = sourceEditorInstance.getCursor();
       pmPos = cmToPmCursor(doc.content, offset);
-      doc.content = sourceEditorInstance.getValue();
+      if (!doc.htmlImport) doc.content = sourceEditorInstance.getValue();
     }
     doc.mode = 'live';
-    nextTick(() => {
+    void mountEditor().then(() => {
       if (liveEditorInstance) {
         liveEditorInstance.setPmPos(pmPos);
       }
@@ -265,6 +337,16 @@ watch(
     mountEditor();
   }
 );
+
+watch(() => docsStore.documents.map(d => d.id), (ids) => {
+  for (const [key, cached] of editorCache) {
+    if (!ids.some(id => key.startsWith(`${id}:`))) {
+      void cached.live?.destroy();
+      cached.source?.destroy();
+      editorCache.delete(key);
+    }
+  }
+});
 
 watch(
   () => uiStore.findBarVisible,
@@ -348,8 +430,41 @@ async function insertLocalImage() {
   input.click();
 }
 
+function confirmHtmlEdit(id = docsStore.activeDocumentId) {
+  const doc = docsStore.activeDocument;
+  const preview = doc?.htmlImport;
+  if (!doc || doc.id !== id || !preview || preview.saving || uiStore.confirmDialog.visible) return;
+  if (preview.state !== 'complete' && preview.state !== 'degraded') return;
+  uiStore.showConfirm({
+    title: '另存为 Markdown？',
+    message: 'HTML 预览为只读。另存为 Markdown 后即可编辑。',
+    confirmText: '另存为',
+    cancelText: '取消',
+    onConfirm: () => { void docsStore.saveAsDocument(doc.id); },
+  });
+}
+
+function interceptHtmlEdit(event: Event) {
+  if (!docsStore.activeDocument?.htmlImport) return;
+  event.preventDefault();
+  event.stopPropagation();
+  confirmHtmlEdit();
+}
+
+function interceptHtmlEditKey(event: KeyboardEvent) {
+  const key = event.key.toLowerCase();
+  const shortcut = (event.ctrlKey || event.metaKey) && !event.altKey &&
+    ['x', 'v', 'z', 'y', 'b', 'i', 'u'].includes(key);
+  const typing = key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey && !event.isComposing;
+  if (typing || shortcut || ['backspace', 'delete', 'enter'].includes(key)) interceptHtmlEdit(event);
+}
+
 // Editor formatting & context actions
 function executeEditorAction(action: string, payload?: any) {
+  if (docsStore.activeDocument?.htmlImport && !['copy', 'copy-plain-text', 'copy-markdown', 'copy-html', 'select-all'].includes(action)) {
+    confirmHtmlEdit();
+    return;
+  }
   if (action === 'image') {
     void insertLocalImage();
     return;
@@ -357,6 +472,7 @@ function executeEditorAction(action: string, payload?: any) {
   const isLive = docsStore.activeDocument?.mode === 'live';
 
   if (isLive) {
+    if (liveEditorInstance && insertStructuredAction(liveEditorInstance, action)) return;
     const view = liveEditorInstance?.getView();
     if (!view) return;
     view.focus();
@@ -432,8 +548,17 @@ function executeEditorAction(action: string, payload?: any) {
         dispatch(state.tr.replaceSelectionWith(schema.text(`\`\`\`\n${text}\n\`\`\``)));
       }
     } else if (action === 'math') {
-      const text = state.doc.textBetween(selection.from, selection.to);
-      dispatch(state.tr.replaceSelectionWith(schema.text(`$$\n${text}\n$$`)));
+      const selected = state.doc.textBetween(selection.from, selection.to);
+      const offset = pmToCmCursor(state.doc, selection.from);
+      const end = pmToCmCursor(state.doc, selection.to);
+      const doc = docsStore.activeDocument!;
+      doc.mode = 'source';
+      void mountEditor().then(() => {
+        if (docsStore.activeDocumentId !== doc.id || !sourceEditorInstance) return;
+        const cm = sourceEditorInstance.view;
+        cm.dispatch({ changes: { from: Math.min(offset, cm.state.doc.length), to: Math.min(end, cm.state.doc.length), insert: `\n$$\n${selected}\n$$\n` } });
+        uiStore.flashStatus('公式已插入，当前在源码模式编辑');
+      });
     } else if (action === 'table') {
       const tableText = '\n| 列1 | 列2 | 列3 |\n| --- | --- | --- |\n| 内容 | 内容 | 内容 |\n';
       dispatch(state.tr.replaceSelectionWith(schema.text(tableText)));
@@ -688,7 +813,8 @@ function performFind(query: string, matchCase: boolean, direction: 'next' | 'pre
     const view = liveEditorInstance?.getView();
     if (!view) return;
 
-    if (queryChanged || currentMatches.length === 0) {
+    {
+      const previousIndex = currentMatchIndex;
       currentMatches = [];
       const flags = matchCase ? 'g' : 'gi';
       const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -705,11 +831,12 @@ function performFind(query: string, matchCase: boolean, direction: 'next' | 'pre
           }
         }
       });
-      currentMatchIndex = currentMatches.length > 0 ? 0 : -1;
-    } else if (direction === 'next') {
-      currentMatchIndex = (currentMatchIndex + 1) % currentMatches.length;
-    } else if (direction === 'prev') {
-      currentMatchIndex = (currentMatchIndex - 1 + currentMatches.length) % currentMatches.length;
+      currentMatchIndex = currentMatches.length > 0
+        ? (queryChanged ? 0 : Math.min(Math.max(previousIndex, 0), currentMatches.length - 1)) : -1;
+      if (!queryChanged && currentMatches.length) {
+        if (direction === 'next') currentMatchIndex = (currentMatchIndex + 1) % currentMatches.length;
+        if (direction === 'prev') currentMatchIndex = (currentMatchIndex - 1 + currentMatches.length) % currentMatches.length;
+      }
     }
 
     if (currentMatchIndex >= 0 && currentMatchIndex < currentMatches.length) {
@@ -767,7 +894,8 @@ function performFind(query: string, matchCase: boolean, direction: 'next' | 'pre
     const cm = sourceEditorInstance?.view;
     if (!cm) return;
 
-    if (queryChanged || currentMatches.length === 0) {
+    {
+      const previousIndex = currentMatchIndex;
       currentMatches = [];
       const text = cm.state.doc.toString();
       const flags = matchCase ? 'g' : 'gi';
@@ -780,14 +908,15 @@ function performFind(query: string, matchCase: boolean, direction: 'next' | 'pre
           to: m.index + m[0].length,
         });
       }
-      currentMatchIndex = currentMatches.length > 0 ? 0 : -1;
+      currentMatchIndex = currentMatches.length > 0
+        ? (queryChanged ? 0 : Math.min(Math.max(previousIndex, 0), currentMatches.length - 1)) : -1;
+      if (!queryChanged && currentMatches.length) {
+        if (direction === 'next') currentMatchIndex = (currentMatchIndex + 1) % currentMatches.length;
+        if (direction === 'prev') currentMatchIndex = (currentMatchIndex - 1 + currentMatches.length) % currentMatches.length;
+      }
       cm.dispatch({
         effects: setSearchQuery.of(new SearchQuery({ search: query, caseSensitive: matchCase })),
       });
-    } else if (direction === 'next') {
-      currentMatchIndex = (currentMatchIndex + 1) % currentMatches.length;
-    } else if (direction === 'prev') {
-      currentMatchIndex = (currentMatchIndex - 1 + currentMatches.length) % currentMatches.length;
     }
 
     if (currentMatchIndex >= 0 && currentMatchIndex < currentMatches.length) {
@@ -842,8 +971,10 @@ function handleFindPrev(e: Event) {
 }
 
 function handleReplace(e: Event) {
+  if (docsStore.activeDocument?.htmlImport) return;
   const custom = e as CustomEvent<{ query: string; replacement: string; matchCase: boolean }>;
   const { query, replacement, matchCase } = custom.detail;
+  performFind(query, matchCase, 'stay');
   const isLive = docsStore.activeDocument?.mode === 'live';
 
   if (isLive) {
@@ -872,6 +1003,7 @@ function handleReplace(e: Event) {
 }
 
 function handleReplaceAll(e: Event) {
+  if (docsStore.activeDocument?.htmlImport) return;
   const custom = e as CustomEvent<{ query: string; replacement: string; matchCase: boolean }>;
   const { query, replacement, matchCase } = custom.detail;
   const isLive = docsStore.activeDocument?.mode === 'live';
@@ -911,6 +1043,13 @@ function handleReplaceAll(e: Event) {
 function handleRemountDoc(e: Event) {
   const custom = e as CustomEvent<{ id: string }>;
   if (custom.detail?.id === docsStore.activeDocumentId) {
+    for (const [key, cached] of editorCache) {
+      if (key.startsWith(`${custom.detail.id}:`)) {
+        void cached.live?.destroy();
+        cached.source?.destroy();
+        editorCache.delete(key);
+      }
+    }
     currentMountedDocId = null;
     mountEditor();
   }
@@ -919,6 +1058,7 @@ function handleRemountDoc(e: Event) {
 onMounted(() => {
   mountEditor();
   window.addEventListener('editor:remount-doc', handleRemountDoc);
+  window.addEventListener('editor:snapshot-session', captureHtmlViewState);
   window.addEventListener('editor:navigate-heading', handleNavigateHeading);
   window.addEventListener('editor:action', handleEditorAction);
   window.addEventListener('editor:find-query', handleFindQuery);
@@ -932,8 +1072,16 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  disposed = true;
+  currentMountedDocId = null;
   destroyCurrentEditor();
+  for (const cached of editorCache.values()) {
+    void cached.live?.destroy();
+    cached.source?.destroy();
+  }
+  editorCache.clear();
   window.removeEventListener('editor:remount-doc', handleRemountDoc);
+  window.removeEventListener('editor:snapshot-session', captureHtmlViewState);
   window.removeEventListener('editor:navigate-heading', handleNavigateHeading);
   window.removeEventListener('editor:action', handleEditorAction);
   window.removeEventListener('editor:find-query', handleFindQuery);
@@ -944,9 +1092,8 @@ onUnmounted(() => {
   if (containerRef.value?.parentElement) {
     containerRef.value.parentElement.removeEventListener('wheel', handleEditorWheel);
   }
-  if (autoSaveTimer) {
-    clearTimeout(autoSaveTimer);
-  }
+  for (const timer of autoSaveTimers.values()) clearTimeout(timer);
+  autoSaveTimers.clear();
 });
 </script>
 
@@ -957,17 +1104,19 @@ onUnmounted(() => {
     :class="{
       'focus-mode': uiStore.focusMode,
       'typewriter-mode': uiStore.typewriterMode,
+      'html-readonly': !!docsStore.activeDocument?.htmlImport,
     }"
     @click="handleContainerClick"
     @contextmenu.prevent="handleContextMenu"
   >
-    <div ref="containerRef" class="editor-mount-point markdown-body" data-file-drop-target></div>
+    <div v-show="!docsStore.activeDocument?.htmlImport || ['complete', 'degraded'].includes(docsStore.activeDocument.htmlImport.state) || ['complete', 'degraded'].includes(docsStore.activeDocument.htmlImport.result?.status || '')" ref="containerRef" @beforeinput.capture="interceptHtmlEdit" @paste.capture="interceptHtmlEdit" @cut.capture="interceptHtmlEdit" @keydown.capture="interceptHtmlEditKey" class="editor-mount-point markdown-body" data-file-drop-target></div>
 
     <!-- Typora-like Right-Click Context Menu -->
     <EditorContextMenu
       v-if="contextMenuVisible"
       :x="contextMenuPos.x"
       :y="contextMenuPos.y"
+      :read-only="!!docsStore.activeDocument?.htmlImport"
       @close="contextMenuVisible = false"
       @action="handleContextMenuAction"
     />
@@ -993,6 +1142,10 @@ onUnmounted(() => {
   box-sizing: border-box;
   outline: none;
 }
+
+.html-readonly :deep(.myd-table-toolbar),
+.html-readonly :deep(.myd-code-block-lang) { display: none; }
+.html-readonly :deep(input[type="checkbox"]) { pointer-events: none; }
 
 /* Focus Mode (Chapter 7.8) */
 .focus-mode :deep(.milkdown .ProseMirror > *:not(.ProseMirror-selectednode):not(:focus-within)),

@@ -14,6 +14,14 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 // @ts-ignore: Unused imports
 import * as dto$0 from "../dto/models.js";
 
+export function AbortHtmlSave(req: dto$0.AbortHtmlSaveRequest): $CancellablePromise<dto$0.AbortHtmlSaveResponse | null> {
+    return $Call.ByID(2429185133, req);
+}
+
+export function BeginHtmlSave(req: dto$0.BeginHtmlSaveRequest): $CancellablePromise<dto$0.BeginHtmlSaveResponse | null> {
+    return $Call.ByID(1536587370, req);
+}
+
 /**
  * CheckExternalChange checks if the file was modified on disk outside the application.
  */
@@ -26,6 +34,10 @@ export function CheckExternalChange(docID: string, path: string, knownHash: stri
  */
 export function CloseFile(docID: string): $CancellablePromise<void> {
     return $Call.ByID(1947227993, docID);
+}
+
+export function CommitHtmlSave(req: dto$0.CommitHtmlSaveRequest): $CancellablePromise<dto$0.CommitHtmlSaveResponse | null> {
+    return $Call.ByID(4044434104, req);
 }
 
 /**
@@ -47,6 +59,13 @@ export function OpenFileByPath(filePath: string): $CancellablePromise<dto$0.Docu
  */
 export function OpenFileDialog(): $CancellablePromise<dto$0.DocumentPayload | null> {
     return $Call.ByID(1844596127);
+}
+
+/**
+ * OpenHtmlWithEncoding retries an authorized HTML file with an explicit encoding.
+ */
+export function OpenHtmlWithEncoding(filePath: string, encoding: string): $CancellablePromise<dto$0.DocumentPayload | null> {
+    return $Call.ByID(806571509, filePath, encoding);
 }
 
 /**

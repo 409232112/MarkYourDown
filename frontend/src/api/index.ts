@@ -13,6 +13,7 @@ export interface FileInfo {
   path: string;
   title: string;
   content: string;
+  format?: 'markdown' | 'html';
   encoding: string;
   eol: 'crlf' | 'lf' | 'mixed';
   mtimeMs: number;
@@ -78,27 +79,55 @@ function hasLocalStorage(): boolean {
   return typeof localStorage !== 'undefined' && typeof localStorage.getItem === 'function';
 }
 
+function toFileInfo(res: any): FileInfo {
+  return {
+    id: res.id || `doc-${Date.now()}`, path: res.path, title: res.title, content: res.content,
+    format: res.format || (/\.html?$/i.test(res.path) ? 'html' : 'markdown'),
+    encoding: res.encoding || 'utf8', eol: res.eol || 'crlf',
+    mtimeMs: res.disk?.mtimeMs || Date.now(), size: res.disk?.size ?? res.content.length, hash: res.disk?.hash || '',
+  };
+}
+async function retryHtmlEncoding(error: unknown, knownPath?: string): Promise<FileInfo | null> {
+  const message = error instanceof Error ? error.message : String(error);
+  const marker = /(?:UNSUPPORTED_ENCODING|DECODE_FAILED):/.exec(message);
+  if (!marker || typeof window === 'undefined') {
+    if (typeof window !== 'undefined') window.alert(`打开文件失败：${message}`);
+    return null;
+  }
+  // The dialog authorizes the file before reading and prefixes its error with the selected path.
+  const prefix = message.slice(0, marker.index).replace(/^Error:\s*/, '').replace(/:\s*$/, '').trim();
+  const path = knownPath || prefix;
+  if (!path || !/\.html?$/i.test(path)) {
+    window.alert(`打开文件失败：${message}`);
+    return null;
+  }
+  let detail = message;
+  while (true) {
+    const choice = window.prompt(`${detail}\n请输入编码：utf8、gbk 或 gb18030（取消则关闭）`, 'gb18030');
+    if (choice === null) return null;
+    const encoding = choice.trim().toLowerCase();
+    if (!['utf8', 'utf-8', 'gbk', 'gb18030'].includes(encoding)) { detail = '不支持该编码。'; continue; }
+    try {
+      const res = await (FileService as any).OpenHtmlWithEncoding(path, encoding);
+      return res ? toFileInfo(res) : null;
+    } catch (e) {
+      detail = e instanceof Error ? e.message : String(e);
+    }
+  }
+}
+
 export const fileApi = {
   async openFileDialog(): Promise<FileInfo | null> {
     try {
       if (FileService && typeof FileService.OpenFileDialog === 'function') {
         const res = await FileService.OpenFileDialog();
         if (res) {
-          return {
-            id: res.id || `doc-${Date.now()}`,
-            path: res.path,
-            title: res.title,
-            content: res.content,
-            encoding: res.encoding || 'utf8',
-            eol: (res.eol as any) || 'crlf',
-            mtimeMs: res.disk?.mtimeMs || Date.now(),
-            size: res.disk?.size || res.content.length,
-            hash: res.disk?.hash || '',
-          };
+          return toFileInfo(res);
         }
       }
     } catch (e) {
       console.warn('FileService.OpenFileDialog error:', e);
+      return retryHtmlEncoding(e);
     }
     return null;
   },
@@ -108,21 +137,12 @@ export const fileApi = {
       if (FileService && typeof FileService.OpenFileByPath === 'function') {
         const res = await FileService.OpenFileByPath(path);
         if (res) {
-          return {
-            id: res.id || `doc-${Date.now()}`,
-            path: res.path,
-            title: res.title,
-            content: res.content,
-            encoding: res.encoding || 'utf8',
-            eol: (res.eol as any) || 'crlf',
-            mtimeMs: res.disk?.mtimeMs || Date.now(),
-            size: res.disk?.size || res.content.length,
-            hash: res.disk?.hash || '',
-          };
+          return toFileInfo(res);
         }
       }
     } catch (e) {
       console.warn('FileService.OpenFileByPath error:', e);
+      return retryHtmlEncoding(e, path);
     }
     return null;
   },
@@ -215,16 +235,28 @@ export const fileApi = {
     return null;
   },
 
-  async checkStatus(docId: string, path: string, knownHash: string, knownMtime = 0, knownSize = 0): Promise<{ status: string } | null> {
+  async checkStatus(docId: string, path: string, knownHash: string, knownMtime = 0, knownSize = 0): Promise<{ status: string; disk?: { mtimeMs: number; size: number; hash: string } } | null> {
     try {
       if (FileService && typeof (FileService as any).CheckExternalChange === 'function') {
         const res = await (FileService as any).CheckExternalChange(docId, path, knownHash, knownMtime, knownSize);
-        if (res) return { status: res.status };
+        if (res) return { status: res.status, disk: res.disk };
       }
     } catch (e) {
       console.warn('FileService.CheckExternalChange error:', e);
     }
     return null;
+  },
+
+  // Out-of-bounds, permission errors and unavailable runtimes are unknown, not missing.
+  async probeLocalImage(docPath: string, imgPath: string): Promise<'available' | 'missing' | 'unknown'> {
+    if (!docPath || !/^file:/i.test(imgPath) || !FileService || typeof FileService.GetImageToken !== 'function') return 'unknown';
+    try {
+      const token = await FileService.GetImageToken(docPath, imgPath);
+      return token ? 'available' : 'unknown';
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return /\bimage not found\b/i.test(message) ? 'missing' : 'unknown';
+    }
   },
 
   async getImageToken(docPath: string, imgPath: string): Promise<string> {

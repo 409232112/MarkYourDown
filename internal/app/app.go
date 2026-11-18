@@ -4,6 +4,8 @@ import (
 	"embed"
 	"os"
 	"path/filepath"
+	"sync/atomic"
+	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
@@ -97,6 +99,15 @@ func CreateApp(frontendAssets embed.FS) *AppContext {
 		},
 	})
 
+	// Do not let Alt+F4 or the native close button interrupt an HTML export.
+	// The hook never takes the save mutex: the UI thread must stay available to
+	// dismiss the native save dialog and process the commit response.
+	mainWindow.RegisterHook(events.Common.WindowClosing, htmlSaveCloseGuard(
+		services.HtmlSaveInProgress,
+		func() { mainWindow.Close() },
+		func() { app.Event.Emit("html-save:close-pending") },
+	))
+
 	// Handle native file drop events
 	mainWindow.OnWindowEvent(events.Common.WindowFilesDropped, func(e *application.WindowEvent) {
 		if mainWindow != nil {
@@ -149,5 +160,27 @@ func CreateApp(frontendAssets embed.FS) *AppContext {
 		BackupService:    backupSvc,
 		SettingsService:  settingsSvc,
 		ExportService:    exportSvc,
+	}
+}
+
+// htmlSaveCloseGuard schedules one close after the last outstanding save,
+// without blocking the operating system's window event thread.
+func htmlSaveCloseGuard(inProgress func() bool, closeWindow, notify func()) func(*application.WindowEvent) {
+	var pending atomic.Bool
+	return func(e *application.WindowEvent) {
+		if !inProgress() {
+			return
+		}
+		e.Cancel()
+		notify()
+		if pending.CompareAndSwap(false, true) {
+			go func() {
+				for inProgress() {
+					time.Sleep(100 * time.Millisecond)
+				}
+				pending.Store(false)
+				closeWindow()
+			}()
+		}
 	}
 }
